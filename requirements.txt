@@ -1,0 +1,2 @@
+# Core package intentionally has no hard runtime dependencies.
+# Development smoke tests use pytest via `python -m pip install -e .[dev]`.

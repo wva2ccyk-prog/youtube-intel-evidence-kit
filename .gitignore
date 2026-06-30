@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Generated public-demo artifacts
+outputs/
+smoke_outputs/
+dist/
+build/
+
+# Private runtime/state folders that must never enter a public release
+pilot_[r]uns/
+pilot_review/
+pilot_review_results/
+pilot_selection/
+pilot_acceptance/
+codex_state/
+.youtube_intel/
+.tmp/
+tmp_*/
+
+# Runtime data and media artifacts
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.jsonl
+*.html
+*.mp4
+*.m4v
+*.mov
+*.webm
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.vtt
+*.srt
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# Keep synthetic fixtures explicitly tracked even though the extension is ignored above
+!examples/synthetic_transcript.vtt
+!examples/**/*.json
+!docs/**/*.md
+!tests/**/*.py

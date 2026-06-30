@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtube-intel-evidence-kit"
+version = "0.1.0"
+description = "Cross-video YouTube opinion-terrain packaging with caption-first evidence gates and MCP-ready handoff helpers."
+requires-python = ">=3.10"
+dependencies = []
+license = { text = "MIT" }
+readme = "README.md"
+keywords = ["youtube", "video-analysis", "mcp", "opinion-terrain", "evidence"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "jsonschema>=4.0.0"]
+
+[project.scripts]
+youtube-intel = "youtube_intel.cli:main"
+youtube-mcp-handoff = "youtube_mcp_handoff.stdio_server:run_stdio_server"
+youtube-ops = "youtube_intel.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["youtube_ops_cli"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

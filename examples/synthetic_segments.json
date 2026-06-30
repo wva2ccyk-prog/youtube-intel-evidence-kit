@@ -1,0 +1,31 @@
+{
+  "video": {
+    "video_id": "synthetic-field-demo",
+    "title": "Synthetic Orchard Sensor Field Notes",
+    "language": "en",
+    "duration_seconds": 24
+  },
+  "segments": [
+    {
+      "text": "The vendor says the orchard sensor kit can cut water use by twenty percent.",
+      "time_ref": "00:06",
+      "speaker": "narrator",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "In the field, the cheap probes drifted after two foggy nights, which the sponsored case study did not mention.",
+      "time_ref": "00:12",
+      "speaker": "narrator",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "This might be wrong, but local salinity may explain the yield bump more than the sensor software.",
+      "time_ref": "00:18",
+      "speaker": "narrator",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}

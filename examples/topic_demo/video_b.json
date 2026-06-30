@@ -1,0 +1,32 @@
+{
+  "video": {
+    "video_id": "synthetic-orchard-field-b",
+    "title": "Synthetic Agronomist Field Walk: Sensor Drift",
+    "language": "en",
+    "duration_seconds": 110,
+    "genre": "technical_fieldwork"
+  },
+  "segments": [
+    {
+      "text": "In the field, the cheap probes drifted after two foggy nights, which the sponsored case study did not mention.",
+      "time_ref": "00:21",
+      "speaker": "agronomist",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "This might be wrong, but local salinity may explain the yield bump more than the sensor software.",
+      "time_ref": "00:49",
+      "speaker": "agronomist",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "Water savings can happen, but the number depends on soil and maintenance discipline.",
+      "time_ref": "01:18",
+      "speaker": "agronomist",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}

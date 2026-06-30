@@ -1,0 +1,39 @@
+{
+  "video": {
+    "video_id": "synthetic-orchard-policy-c",
+    "title": "Synthetic Local Policy Panel: Orchard Tech Adoption",
+    "language": "en",
+    "duration_seconds": 120,
+    "genre": "policy_expert_panel"
+  },
+  "segments": [
+    {
+      "text": "The local plan gives policy incentives for sensor adoption, but it does not guarantee water savings.",
+      "time_ref": "00:17",
+      "speaker": "policy_professor",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "Several growers say maintenance and calibration are the hidden cost, not the hardware price.",
+      "time_ref": "00:58",
+      "speaker": "grower_rep",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "The useful part is monitoring, not proving that the software caused the yield bump.",
+      "time_ref": "01:31",
+      "speaker": "policy_professor",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "The subsidy deadline is pushing sensor adoption faster than farmer demand.",
+      "time_ref": "01:52",
+      "speaker": "policy_professor",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}

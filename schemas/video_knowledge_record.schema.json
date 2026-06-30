@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/youtube-intel/video_knowledge_record.schema.json",
+  "title": "VideoKnowledgeRecord",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "topic",
+    "video",
+    "analysis_layer",
+    "truth_status",
+    "fact_check_status",
+    "claim_records",
+    "evidence_records",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": "youtube_video_knowledge_record_v0.1"},
+    "topic": {
+      "type": "object",
+      "required": ["topic_id", "title"],
+      "properties": {
+        "topic_id": {"type": "string"},
+        "title": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "video": {
+      "type": "object",
+      "required": ["video_id", "title", "role_in_topic", "transcript_source", "transcript_quality"],
+      "properties": {
+        "video_id": {"type": "string"},
+        "title": {"type": ["string", "null"]},
+        "language": {"type": ["string", "null"]},
+        "duration_seconds": {"type": ["integer", "null"]},
+        "role_in_topic": {"type": "string"},
+        "source_url": {"type": ["string", "null"]},
+        "channel": {"type": ["string", "null"]},
+        "published_at": {"type": ["string", "null"]},
+        "transcript_source": {"type": "string"},
+        "transcript_quality": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "analysis_layer": {"const": "single_video_input_for_topic_collection"},
+    "truth_status": {"const": "not_evaluated"},
+    "fact_check_status": {"const": "not_performed"},
+    "claim_records": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/claimRecord"}
+    },
+    "evidence_records": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidenceRecord"}
+    },
+    "aside_candidate_uids": {"type": "array", "items": {"type": "string"}},
+    "counts": {"type": "object"},
+    "need_gate_summary": {"type": "object"},
+    "provenance": {"type": "object"},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "confidence": {"enum": ["high", "medium", "low", "unknown"]},
+    "modality": {"enum": ["caption", "asr", "ocr", "vision", "scene", "speaker", "external", "mixed"]},
+    "needGateStatus": {"enum": ["not_needed", "needed", "unknown"]},
+    "evidenceRecord": {
+      "type": "object",
+      "required": ["evidence_id", "video_id", "modality", "timestamp_start", "timestamp_end", "time_ref", "speaker", "speaker_confidence", "text", "confidence", "source_separation"],
+      "properties": {
+        "evidence_id": {"type": "string"},
+        "video_id": {"type": "string"},
+        "modality": {"type": "array", "items": {"$ref": "#/$defs/modality"}, "minItems": 1},
+        "timestamp_start": {"type": ["number", "null"]},
+        "timestamp_end": {"type": ["number", "null"]},
+        "time_ref": {"type": ["string", "null"]},
+        "speaker": {"type": ["string", "null"]},
+        "speaker_confidence": {"enum": ["high", "medium", "low", "unknown"]},
+        "text": {"type": "string"},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "source_separation": {"const": "video_internal_claim_not_external_source"}
+      },
+      "additionalProperties": true
+    },
+    "evidenceCoordinate": {
+      "type": "object",
+      "required": ["video_id", "timestamp_start", "timestamp_end", "time_ref", "speaker", "speaker_confidence", "modality", "evidence_id"],
+      "properties": {
+        "video_id": {"type": "string"},
+        "timestamp_start": {"type": ["number", "null"]},
+        "timestamp_end": {"type": ["number", "null"]},
+        "time_ref": {"type": ["string", "null"]},
+        "speaker": {"type": ["string", "null"]},
+        "speaker_confidence": {"enum": ["high", "medium", "low", "unknown"]},
+        "modality": {"type": "array", "items": {"$ref": "#/$defs/modality"}, "minItems": 1},
+        "evidence_id": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "needGates": {
+      "type": "object",
+      "required": ["asr", "ocr_vision", "speaker_diarization", "external_verification", "strong_model_review"],
+      "properties": {
+        "asr": {"$ref": "#/$defs/needGateStatus"},
+        "ocr_vision": {"$ref": "#/$defs/needGateStatus"},
+        "speaker_diarization": {"$ref": "#/$defs/needGateStatus"},
+        "external_verification": {"$ref": "#/$defs/needGateStatus"},
+        "strong_model_review": {"$ref": "#/$defs/needGateStatus"}
+      },
+      "additionalProperties": false
+    },
+    "claimRecord": {
+      "type": "object",
+      "required": [
+        "claim_uid",
+        "source_video_id",
+        "text",
+        "canonical_text",
+        "speaker",
+        "speaker_confidence",
+        "time_ref",
+        "timestamp_start",
+        "timestamp_end",
+        "evidence_ids",
+        "evidence_coordinate",
+        "claim_group_key",
+        "stance",
+        "evidence",
+        "confidence",
+        "modality_sources",
+        "verification_status",
+        "need_gates"
+      ],
+      "properties": {
+        "claim_uid": {"type": "string"},
+        "source_video_id": {"type": "string"},
+        "local_claim_id": {"type": "string"},
+        "text": {"type": "string"},
+        "canonical_text": {"type": "string"},
+        "speaker": {"type": ["string", "null"]},
+        "speaker_confidence": {"enum": ["high", "medium", "low", "unknown"]},
+        "time_ref": {"type": ["string", "null"]},
+        "timestamp_start": {"type": ["number", "null"]},
+        "timestamp_end": {"type": ["number", "null"]},
+        "content_type": {"type": "string"},
+        "evidence": {"type": "string"},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "evidence_coordinate": {"$ref": "#/$defs/evidenceCoordinate"},
+        "confidence": {"$ref": "#/$defs/confidence"},
+        "modality_sources": {"type": "array", "items": {"$ref": "#/$defs/modality"}, "minItems": 1},
+        "claim_group_key": {"type": "string"},
+        "claim_group_label": {"type": "string"},
+        "stance": {"type": "string"},
+        "support_role": {"type": "string"},
+        "aside_type": {"type": "string"},
+        "aside_score": {"type": "integer"},
+        "verification_status": {"const": "video_internal_not_fact_checked"},
+        "need_gates": {"$ref": "#/$defs/needGates"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
