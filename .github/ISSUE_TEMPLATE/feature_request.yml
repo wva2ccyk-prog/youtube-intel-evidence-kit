@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest an enhancement that fits the cross-video evidence boundary.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Requests that strengthen cross-video opinion-terrain synthesis are the
+        best fit. Single-video summarization, downloaders, and truth-verdict
+        features are out of scope. See `docs/SCOPE_BOUNDARY.md` and `ROADMAP.md`.
+  - type: textarea
+    id: question
+    attributes:
+      label: Research question
+      description: What multi-video research question are you trying to answer?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should the kit do? Which artifact or command would it touch?
+    validations:
+      required: true
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Boundary check
+      description: Confirm this does not turn the kit into a summarizer, downloader, or truth-verdict engine.
+    validations:
+      required: false

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Scope and boundary
+    url: https://github.com/wva2ccyk-prog/youtube-intel-evidence-kit/blob/main/docs/SCOPE_BOUNDARY.md
+    about: Before filing, check the scope boundary. This is a cross-video evidence contract, not a single-video summarizer or downloader.
