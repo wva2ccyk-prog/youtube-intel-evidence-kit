@@ -8,12 +8,12 @@ version = "0.1.0"
 description = "Cross-video YouTube opinion-terrain packaging with caption-first evidence gates and MCP-ready handoff helpers."
 requires-python = ">=3.10"
 dependencies = []
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
 keywords = ["youtube", "video-analysis", "mcp", "opinion-terrain", "evidence"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 
