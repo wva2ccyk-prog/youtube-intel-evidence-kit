@@ -84,6 +84,26 @@ def test_topic_demo_creates_cross_video_terrain_files(tmp_path: Path):
     assert collection["terrain"]["repeated_claim_group_ids"]
     assert collection["terrain"]["disagreement_group_ids"]
     assert collection["terrain"]["outlier_group_ids"]
+    assert collection["terrain"]["opinion_group_ids"]
+    assert collection["opinion_groups"]
     terrain_md = Path(paths["topic_terrain_md"]).read_text(encoding="utf-8")
     assert "Single-video evidence packets are inputs" in terrain_md
     assert "It does not decide which claim is true" in terrain_md
+    assert "## Opinion Groups" in terrain_md
+
+
+def test_topic_demo_accepts_token_jaccard_clusterer(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    out = tmp_path / "topic_demo_jaccard"
+    result = _run_cli(
+        "topic-demo",
+        "--out", str(out),
+        "--clusterer", "token_jaccard",
+        "--token-jaccard-threshold", "0.45",
+        cwd=root,
+    )
+    assert result["ok"] is True
+    collection = json.loads(Path(result["paths"]["topic_collection_json"]).read_text(encoding="utf-8"))
+    assert collection["clusterer"] == "token_jaccard"
+    assert collection["claim_groups"]
+    assert collection["terrain"]["opinion_group_ids"]

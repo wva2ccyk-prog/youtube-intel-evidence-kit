@@ -10,7 +10,7 @@ from typing import Any
 from youtube_intel.analysis_worth import build_analysis_worth
 from youtube_intel.io_utils import read_json, write_json, write_text
 from youtube_intel.reporting import write_handoff_bundle
-from youtube_intel.topic_collection import build_topic_demo_from_segments
+from youtube_intel.topic_collection import CLUSTERERS, build_topic_demo_from_segments
 from youtube_plugins.registry import check_all
 from youtube_residual import build_residual_package, validate_package
 
@@ -176,6 +176,8 @@ def cmd_topic_demo(args: argparse.Namespace) -> int:
         topic_id=args.topic_id,
         topic_title=args.topic_title,
         output_dir=Path(args.out),
+        clusterer=args.clusterer,
+        token_jaccard_threshold=args.token_jaccard_threshold,
     )
     return _print(manifest)
 
@@ -231,6 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--topic-dir")
     p.add_argument("--topic-id", default="synthetic-orchard-sensors")
     p.add_argument("--topic-title", default="Synthetic orchard sensor adoption terrain")
+    p.add_argument("--clusterer", choices=CLUSTERERS, default="normalized")
+    p.add_argument("--token-jaccard-threshold", type=float, default=0.5)
     p.set_defaults(func=cmd_topic_demo)
 
     p = sub.add_parser("package", help="Build a residual package from admitted segment JSON.")

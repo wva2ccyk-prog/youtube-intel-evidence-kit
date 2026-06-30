@@ -310,6 +310,79 @@ def _group_claims_by_similarity(claims: list[dict[str, Any]], threshold: float =
     return scored
 
 
+# Supported deterministic clusterers for the public core. Both are local and
+# require no network or model download. `normalized` is the default mixed
+# token/character similarity used since the alpha demo; `token_jaccard` is a
+# stricter, purely lexical option that only merges claims whose token sets
+# overlap above a fixed threshold. An embedding-assisted lane can be added
+# later without changing the TopicCollection schema (see GROUPING_METHOD).
+CLUSTERERS = ("normalized", "token_jaccard")
+
+
+def _token_jaccard(a: set[str], b: set[str]) -> float:
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _group_claims_by_token_jaccard(
+    claims: list[dict[str, Any]],
+    threshold: float = 0.5,
+) -> list[tuple[str, list[dict[str, Any]], float]]:
+    """Group claims by token-set Jaccard overlap only.
+
+    This is a stricter, fully lexical alternative to the default mixed
+    similarity. A claim joins the first existing group whose representative
+    token set overlaps at or above `threshold`; otherwise it starts a new
+    group. No network, no embeddings, no model download.
+    """
+    groups: list[list[dict[str, Any]]] = []
+    group_tokens: list[set[str]] = []
+    for claim in claims:
+        tokens = _token_set(claim)
+        matched: int | None = None
+        best_score = 0.0
+        for idx, rep_tokens in enumerate(group_tokens):
+            score = _token_jaccard(tokens, rep_tokens)
+            if score >= threshold and score > best_score:
+                matched = idx
+                best_score = score
+        if matched is not None:
+            groups[matched].append(claim)
+        else:
+            groups.append([claim])
+            group_tokens.append(tokens)
+    scored: list[tuple[str, list[dict[str, Any]], float]] = []
+    for group in groups:
+        key = _make_group_key_from_claims(group)
+        pair_scores = [
+            _token_jaccard(_token_set(group[i]), _token_set(group[j]))
+            for i in range(len(group))
+            for j in range(i + 1, len(group))
+        ]
+        mean_score = round(sum(pair_scores) / len(pair_scores), 4) if pair_scores else 1.0
+        for claim in group:
+            claim["claim_group_key"] = key
+            claim["claim_group_label"] = _group_label(key)
+            claim["normalized_tokens"] = sorted(_token_set(claim))
+        scored.append((key, group, mean_score))
+    return scored
+
+
+def _cluster_claims(
+    claims: list[dict[str, Any]],
+    clusterer: str,
+    *,
+    token_jaccard_threshold: float = 0.5,
+) -> list[tuple[str, list[dict[str, Any]], float]]:
+    """Dispatch to the selected deterministic clusterer."""
+    if clusterer == "token_jaccard":
+        return _group_claims_by_token_jaccard(claims, threshold=token_jaccard_threshold)
+    return _group_claims_by_similarity(claims)
+
+
 def _stance(text: str, evidence: str = "", confidence: str = "") -> str:
     lowered = text.lower()
     if any(token in lowered for token in ("did not mention", "omit", "drift", "maintenance", "not guaranteed", "not discussed", "but", "however", "충돌", "누락")):
@@ -545,13 +618,120 @@ def _make_disagreement_relation(group_id: str, group: dict[str, Any], claims: li
     }
 
 
+# Position axes used to roll claim groups up into opinion groups. These are
+# stance-derived and domain-neutral on purpose: the public core must not encode
+# a specific subject area. Each claim group is assigned to one axis from its
+# dominant support role, and opinion groups are only formed across videos.
+_OPINION_AXES = {
+    "supporting": {
+        "label": "Supporting / promotional position",
+        "summary": "Claim groups that mostly assert or promote the topic claim. Repetition is a terrain signal, not proof.",
+        "roles": {"supporting_or_promotional"},
+    },
+    "challenging": {
+        "label": "Challenging / limiting position",
+        "summary": "Claim groups that mostly caution, qualify, or point at limitations. This is not a truth judgment.",
+        "roles": {"challenging_or_limiting"},
+    },
+    "alternative": {
+        "label": "Alternative-explanation position",
+        "summary": "Claim groups that mostly offer a different explanation or hypothesis. This is not a truth judgment.",
+        "roles": {"alternative_explanation"},
+    },
+    "reported": {
+        "label": "Reported / contextual position",
+        "summary": "Claim groups that mostly report or contextualize without a clear stance.",
+        "roles": {"reported_context"},
+    },
+}
+
+
+def _dominant_axis(group: dict[str, Any]) -> str:
+    """Pick the opinion axis for a claim group from its support roles.
+
+    Uses the group's own `support_roles` terrain. Falls back to `reported`
+    when no clear role is present. Never invents a stance.
+    """
+    roles = set(_as_list(group.get("support_roles")))
+    for axis_key, axis in _OPINION_AXES.items():
+        if axis_key == "reported":
+            continue
+        if roles & axis["roles"]:
+            # A group can carry multiple roles; prefer the first non-reported
+            # axis in declared order (supporting, challenging, alternative).
+            return axis_key
+    return "reported"
+
+
+def build_opinion_groups(
+    claim_groups: list[dict[str, Any]],
+    *,
+    allow_single_video: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Roll claim groups up into cross-video opinion groups.
+
+    Opinion groups are position buckets (supporting / challenging /
+    alternative / reported) built only from structured claim-group fields.
+    By default a bucket is only emitted when its claim groups span at least
+    two distinct source videos, so single-source noise does not look like a
+    shared position. Does not rank truth and does not fabricate groups.
+    """
+    warnings: list[str] = []
+    if not claim_groups:
+        return [], ["opinion_group_builder_no_claim_groups"]
+
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for group in claim_groups:
+        buckets[_dominant_axis(group)].append(group)
+
+    opinion_groups: list[dict[str, Any]] = []
+    og_idx = 0
+    for axis_key in _OPINION_AXES:
+        members = buckets.get(axis_key, [])
+        if not members:
+            continue
+        member_ids = [g.get("group_id") for g in members]
+        video_ids: list[str] = []
+        for g in members:
+            for vid in _as_list(g.get("video_ids")):
+                if vid not in video_ids:
+                    video_ids.append(vid)
+        if len(video_ids) < 2 and not allow_single_video:
+            warnings.append(f"opinion_group_skipped_single_source:{axis_key}")
+            continue
+        og_idx += 1
+        axis = _OPINION_AXES[axis_key]
+        distinguishing = [g.get("representative_claim_uid") for g in members if g.get("representative_claim_uid")]
+        any_disagreement = any(g.get("status", {}).get("disagreement_point") for g in members)
+        opinion_groups.append({
+            "opinion_group_id": f"OG{og_idx:04d}",
+            "axis": axis_key,
+            "label": axis["label"],
+            "position_summary": axis["summary"],
+            "member_claim_group_ids": member_ids,
+            "source_video_ids": sorted(video_ids),
+            "distinguishing_claims": distinguishing,
+            "contains_disagreement_point": any_disagreement,
+            "confidence": "medium" if len(video_ids) >= 2 else "low",
+            "truth_status": "not_evaluated",
+        })
+    if not opinion_groups:
+        warnings.append("opinion_group_builder_produced_no_groups")
+    return opinion_groups, warnings
+
 def build_topic_collection(
     records: list[dict[str, Any]],
     *,
     topic_id: str,
     topic_title: str,
+    clusterer: str = "normalized",
+    token_jaccard_threshold: float = 0.5,
+    build_opinion_groups_layer: bool = True,
+    allow_single_video_opinions: bool = False,
 ) -> dict[str, Any]:
     """Build a deterministic cross-video TopicCollection from records."""
+    if clusterer not in CLUSTERERS:
+        raise ValueError(f"Unsupported clusterer: {clusterer!r}. Choose from {CLUSTERERS}")
     all_claims: list[dict[str, Any]] = []
     videos: dict[str, dict[str, Any]] = {}
     evidence_index: dict[str, dict[str, Any]] = {}
@@ -566,7 +746,7 @@ def build_topic_collection(
             if isinstance(claim, dict):
                 all_claims.append(claim)
 
-    grouped = _group_claims_by_similarity(all_claims)
+    grouped = _cluster_claims(all_claims, clusterer, token_jaccard_threshold=token_jaccard_threshold)
 
     claim_groups: list[dict[str, Any]] = []
     repeated: list[str] = []
@@ -653,6 +833,14 @@ def build_topic_collection(
     for claim in all_claims:
         stance_groups[_text(claim.get("stance"), "reported_claim")].append(_text(claim.get("claim_uid"), "unknown-claim"))
 
+    opinion_groups: list[dict[str, Any]] = []
+    opinion_group_warnings: list[str] = []
+    if build_opinion_groups_layer:
+        opinion_groups, opinion_group_warnings = build_opinion_groups(
+            claim_groups,
+            allow_single_video=allow_single_video_opinions,
+        )
+
     topic_collection = {
         "schema_version": TOPIC_COLLECTION_SCHEMA_VERSION,
         "topic": {
@@ -665,6 +853,7 @@ def build_topic_collection(
         "video_record_count": len(records),
         "claim_total": len(all_claims),
         "claim_groups": claim_groups,
+        "opinion_groups": opinion_groups,
         "stance_groups": dict(sorted(stance_groups.items())),
         "terrain": {
             "repeated_claim_group_ids": repeated,
@@ -673,6 +862,8 @@ def build_topic_collection(
             "disagreement_relations": disagreement_relations,
             "outlier_details": outlier_details,
             "contradiction_candidates": contradiction_candidates,
+            "opinion_group_ids": [og["opinion_group_id"] for og in opinion_groups],
+            "opinion_group_warnings": opinion_group_warnings,
             "operator_judgment_required": True,
             "truth_status": "not_evaluated",
             "fact_check_status": "not_performed",
@@ -680,6 +871,7 @@ def build_topic_collection(
         "claim_index": {str(c.get("claim_uid")): c for c in all_claims},
         "evidence_index": evidence_index,
         "grouping_method": GROUPING_METHOD,
+        "clusterer": clusterer,
         "provenance": {
             "builder": "youtube_intel.topic_collection.build_topic_collection",
             "builder_version": "v0.1",
@@ -791,6 +983,7 @@ def render_topic_terrain_markdown(collection: dict[str, Any]) -> str:
         f"- Repeated claim groups: {len(_as_list(terrain.get('repeated_claim_group_ids')))}",
         f"- Disagreement groups: {len(_as_list(terrain.get('disagreement_group_ids')))}",
         f"- Outlier groups: {len(_as_list(terrain.get('outlier_group_ids')))}",
+        f"- Opinion groups: {len(_as_list(collection.get('opinion_groups')))}",
         "",
         "## Claim Groups",
     ]
@@ -828,6 +1021,23 @@ def render_topic_terrain_markdown(collection: dict[str, Any]) -> str:
                     f"human_review_required={rel.get('human_review_required')}"
                 )
                 lines.append(f"  - why_flagged: {_text(rel.get('why_flagged'), '')}")
+        lines.append("")
+    opinion_groups = _as_list(collection.get("opinion_groups"))
+    if opinion_groups:
+        lines.append("## Opinion Groups")
+        lines.append("Position buckets across videos. Not a truth judgment; repetition is not proof.")
+        for og in opinion_groups:
+            if not isinstance(og, dict):
+                continue
+            lines.append(
+                f"### {og.get('opinion_group_id')} - {_text(og.get('label'), 'opinion group')}"
+            )
+            lines.append(f"- axis: {_text(og.get('axis'), 'unknown')}")
+            lines.append(f"- {_text(og.get('position_summary'), '')}")
+            lines.append(f"- videos: {', '.join(map(str, _as_list(og.get('source_video_ids'))))}")
+            lines.append(f"- member claim groups: {', '.join(map(str, _as_list(og.get('member_claim_group_ids'))))}")
+            lines.append(f"- contains disagreement point: {og.get('contains_disagreement_point')}")
+            lines.append(f"- confidence: {_text(og.get('confidence'), 'unknown')}")
         lines.append("")
     lines.append("## Required Limitations")
     for limitation in TOPIC_LIMITATIONS:
@@ -985,7 +1195,15 @@ def write_topic_bundle(output_dir: str | Path, collection: dict[str, Any], recor
     return manifest
 
 
-def build_topic_demo_from_segments(topic_dir: Path, *, topic_id: str, topic_title: str, output_dir: Path) -> dict[str, Any]:
+def build_topic_demo_from_segments(
+    topic_dir: Path,
+    *,
+    topic_id: str,
+    topic_title: str,
+    output_dir: Path,
+    clusterer: str = "normalized",
+    token_jaccard_threshold: float = 0.5,
+) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     package_paths: list[str] = []
     validation_paths: list[str] = []
@@ -1009,7 +1227,13 @@ def build_topic_demo_from_segments(topic_dir: Path, *, topic_id: str, topic_titl
         validation_paths.append(str(val_path))
         records.append(build_video_knowledge_record(package_dict, topic_id=topic_id, topic_title=topic_title))
 
-    collection = build_topic_collection(records, topic_id=topic_id, topic_title=topic_title)
+    collection = build_topic_collection(
+        records,
+        topic_id=topic_id,
+        topic_title=topic_title,
+        clusterer=clusterer,
+        token_jaccard_threshold=token_jaccard_threshold,
+    )
     expected_path = topic_dir / "expected_groupings.json"
     if expected_path.exists():
         evaluation = evaluate_topic_collection(collection, read_json(expected_path, {}) or {})

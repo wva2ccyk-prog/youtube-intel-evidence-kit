@@ -8,15 +8,26 @@ leaves alpha. For low-level implementation notes see
 
 ## [Unreleased]
 
+### Added
+- Added stance-derived cross-video opinion groups to `TopicCollection` output.
+  Opinion groups roll claim groups up into supporting, challenging,
+  alternative, and reported position buckets without ranking truth.
+- Added the deterministic `token_jaccard` clusterer option for `topic-demo` and
+  the library API. It is local-only and requires no network, embeddings, or
+  model downloads.
+
 ### Changed
 - Modernized packaging license metadata to the SPDX `license = "MIT"` string
   plus `license-files`, removing the deprecated setuptools license table and
   the redundant license classifier.
+- `topic-demo` now writes opinion-group ids and warnings into the terrain
+  section and renders an `Opinion Groups` section in `topic_terrain.md`.
 
 ### Documentation
 - Added this changelog, a public `ROADMAP.md` pointing at the cross-video engine
   plan, and GitHub issue/pull-request templates to make maintenance and
   contribution expectations explicit.
+- Documented the `topic-demo --clusterer token_jaccard` path in `README.md`.
 
 ## [0.1.0] - 2026-06-30
 

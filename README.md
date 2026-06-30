@@ -28,6 +28,7 @@ python -m venv .venv
 python -m pip install -e .[dev]
 youtube-intel doctor
 youtube-intel topic-demo --out outputs/topic_demo
+youtube-intel topic-demo --out outputs/topic_demo_jaccard --clusterer token_jaccard --token-jaccard-threshold 0.45
 ```
 
 Inspect the generated cross-video terrain files:
@@ -68,6 +69,7 @@ python scripts/public_release_leak_scan.py
 |---|---|
 | `youtube-intel doctor` | Check package posture, optional plugins, topic demo availability, and public-safety ignore rules |
 | `youtube-intel topic-demo --out outputs/topic_demo` | Run synthetic cross-video `VideoKnowledgeRecord -> TopicCollection -> topic terrain` flow |
+| `youtube-intel topic-demo --out outputs/topic_demo_jaccard --clusterer token_jaccard` | Run the same flow with the stricter deterministic token-overlap clusterer |
 | `youtube-intel single-video-demo --out outputs/demo` | Run synthetic single-video residual package -> analysis-worth -> AI handoff flow |
 | `youtube-intel package --segments examples/synthetic_segments.json --out outputs/pkg` | Build a residual package from admitted segment JSON |
 | `youtube-intel worth --package outputs/pkg/residual_package.json --out outputs/worth` | Generate analysis-worth JSON and Markdown |
@@ -97,7 +99,7 @@ See `docs/PURPOSE.md`, `docs/OPERATOR_LOOP.md`, and `docs/COST_ROUTING_MATRIX.md
 
 - Builds residual claim packages from admitted, synthetic or operator-provided segment evidence.
 - Converts single-video packages into reusable `VideoKnowledgeRecord` artifacts.
-- Builds a public-safe `TopicCollection` with deterministic normalized-similarity grouping, stance separation, contradiction candidates, and a small labeled fixture score.
+- Builds a public-safe `TopicCollection` with deterministic normalized-similarity grouping, optional token-Jaccard grouping, stance separation, opinion groups, contradiction candidates, and a small labeled fixture score.
 - Preserves timestamps, speakers, evidence labels, modality labels, uncertainty, and residual side signals.
 - Uses analysis-worth as a cost gate before expensive ASR, OCR, vision, source verification, strong model review, or human review.
 - Generates Markdown handoff files that are easier for humans and AI CLI tools to inspect than raw JSON alone.
@@ -169,6 +171,6 @@ MIT
 
 ## Public Demo Boundary
 
-The public `topic-demo` is an alpha deterministic contract demo over synthetic fixtures. It now demonstrates local claim normalization, normalized lexical similarity grouping, stance clustering, contradiction candidates, pair-agreement evaluation, evidence coordinates, repeated claim groups, outliers, and AI/MCP-style handoff files. It is not a production semantic clustering engine. Real topic synthesis still needs optional embedding-based semantic grouping, stronger stance clustering, calibrated contradiction detection, source/speaker weighting, caching, broader benchmarks, and human review for uncertain groups.
+The public `topic-demo` is an alpha deterministic contract demo over synthetic fixtures. It now demonstrates local claim normalization, normalized lexical similarity grouping, optional token-Jaccard grouping, stance-derived opinion groups, contradiction candidates, pair-agreement evaluation, evidence coordinates, repeated claim groups, outliers, and AI/MCP-style handoff files. It is not a production semantic clustering engine. Real topic synthesis still needs optional embedding-based semantic grouping, stronger stance clustering, calibrated contradiction detection, source/speaker weighting, caching, broader benchmarks, and human review for uncertain groups.
 
 
