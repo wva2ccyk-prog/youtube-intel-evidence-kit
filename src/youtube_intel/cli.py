@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from youtube_intel.analysis_worth import build_analysis_worth
+from youtube_intel.hesitation_markers import (
+    analyze_claim_words,
+    build_markers_artifact,
+    render_markers_markdown,
+)
 from youtube_intel.io_utils import read_json, write_json, write_text
 from youtube_intel.reporting import write_handoff_bundle
 from youtube_intel.topic_collection import CLUSTERERS, build_topic_demo_from_segments
@@ -183,6 +188,44 @@ def cmd_topic_demo(args: argparse.Namespace) -> int:
     return _print(manifest)
 
 
+def cmd_hesitation_demo(args: argparse.Namespace) -> int:
+    """Run the deterministic hesitation-marker rules over a synthetic
+    word-timestamp fixture and write the typed, disclaimed artifact.
+
+    This is a contract demo: it needs no ASR and no audio. In a real run the
+    word timestamps come from a need-gated local ASR pass (an escalation gate,
+    not a default) over an operator-selected claim span; see
+    docs/HESITATION_MARKERS.md.
+    """
+    fixture = Path(args.fixture) if args.fixture else _repo_root() / "examples" / "synthetic_hesitation.json"
+    data = read_json(fixture, {})
+    claims = data.get("claims", []) if isinstance(data, dict) else []
+    rows = [
+        analyze_claim_words(
+            c.get("claim_id", f"C{i:03d}"),
+            c.get("words", []),
+            expected_text=c.get("expected_text"),
+            span_start=c.get("span_start"),
+            span_end=c.get("span_end"),
+        )
+        for i, c in enumerate(claims, start=1)
+    ]
+    artifact = build_markers_artifact(
+        rows,
+        provenance={"source": "synthetic_fixture", "fixture": str(fixture), "backend": "none_synthetic"},
+    )
+    out = Path(args.out)
+    json_path = write_json(out / "hesitation_markers.json", artifact)
+    md_path = write_text(out / "hesitation_markers.md", render_markers_markdown(artifact))
+    return _print({
+        "ok": True,
+        "schema_version": artifact["schema_version"],
+        "claim_count": artifact["claim_count"],
+        "hesitation_candidate_count": artifact["hesitation_candidate_count"],
+        "paths": {"json": str(json_path), "markdown": str(md_path)},
+    })
+
+
 def cmd_check_plugins(args: argparse.Namespace) -> int:
     return _print({"ok": True, "optional_plugins": check_all()})
 
@@ -269,6 +312,11 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--overlay")
         p.add_argument("--out", required=True)
         p.set_defaults(func=cmd_handoff)
+
+    p = sub.add_parser("hesitation-demo", help="Run the deterministic Tier-1 hesitation-marker rules over a synthetic word-timestamp fixture (no ASR, no audio).")
+    p.add_argument("--fixture", help="Path to a word-timestamp fixture JSON (default: examples/synthetic_hesitation.json).")
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_hesitation_demo)
 
     p = sub.add_parser("check-plugins", help="Print optional plugin status.")
     p.set_defaults(func=cmd_check_plugins)

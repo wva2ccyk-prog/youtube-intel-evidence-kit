@@ -1,0 +1,61 @@
+{
+  "note": "Synthetic word-timestamp fixture for the hesitation-markers contract demo. Not real audio. Word timings are hand-authored to exercise each deterministic rule (mid-span pause, Korean isolated fillers, restart). See docs/HESITATION_MARKERS.md.",
+  "claims": [
+    {
+      "claim_id": "SYN-C001",
+      "expected_text": "the field yield dropped after the frost",
+      "span_start": 12.0,
+      "span_end": 18.0,
+      "words": [
+        {"word": "the", "start": 12.0, "end": 12.2},
+        {"word": "field", "start": 12.2, "end": 12.5},
+        {"word": "yield", "start": 12.5, "end": 12.9},
+        {"word": "dropped", "start": 12.9, "end": 13.4},
+        {"word": "after", "start": 14.3, "end": 14.6},
+        {"word": "the", "start": 14.6, "end": 14.7},
+        {"word": "frost", "start": 14.7, "end": 15.1}
+      ]
+    },
+    {
+      "claim_id": "SYN-C002",
+      "expected_text": "저기 그 수치는 다시 봐야 합니다",
+      "span_start": 40.0,
+      "span_end": 47.0,
+      "words": [
+        {"word": "저기", "start": 40.0, "end": 40.3},
+        {"word": "그", "start": 40.4, "end": 40.6},
+        {"word": "수치는", "start": 40.7, "end": 41.2},
+        {"word": "다시", "start": 41.3, "end": 41.6},
+        {"word": "봐야", "start": 41.7, "end": 42.0},
+        {"word": "합니다", "start": 42.0, "end": 42.5}
+      ]
+    },
+    {
+      "claim_id": "SYN-C003",
+      "expected_text": "we we measured it twice",
+      "span_start": 60.0,
+      "span_end": 64.0,
+      "words": [
+        {"word": "we", "start": 60.0, "end": 60.2},
+        {"word": "we", "start": 60.2, "end": 60.4},
+        {"word": "measured", "start": 60.4, "end": 60.9},
+        {"word": "it", "start": 60.9, "end": 61.0},
+        {"word": "twice", "start": 61.0, "end": 61.4}
+      ]
+    },
+    {
+      "claim_id": "SYN-C004",
+      "expected_text": "the sensor was calibrated in spring",
+      "span_start": 80.0,
+      "span_end": 85.0,
+      "words": [
+        {"word": "the", "start": 80.0, "end": 80.2},
+        {"word": "sensor", "start": 80.2, "end": 80.6},
+        {"word": "was", "start": 80.6, "end": 80.8},
+        {"word": "calibrated", "start": 80.8, "end": 81.4},
+        {"word": "in", "start": 81.4, "end": 81.5},
+        {"word": "spring", "start": 81.5, "end": 81.9}
+      ]
+    }
+  ]
+}

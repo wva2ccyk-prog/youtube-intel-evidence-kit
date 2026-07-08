@@ -9,6 +9,15 @@ leaves alpha. For low-level implementation notes see
 ## [Unreleased]
 
 ### Added
+- Added Tier-1 **hesitation markers** (`youtube_intel.hesitation_markers`,
+  `youtube-intel hesitation-demo`). Deterministic, stdlib-only detection of
+  mid-span pauses, isolated Korean fillers, and restarts from word-level
+  timestamps — making the thesis's named "hesitation that reveals uncertainty"
+  a concrete, operator-reviewable artifact. `hesitation_score` is `null` by
+  design (a listen-and-judge cue, never a confidence/truth score); artifacts are
+  typed `modality_source: audio` / `evidence_state: operator_review_required`
+  and carry a mandatory disclaimer. ASR is not bundled — word timestamps come
+  from a need-gated operator-side escalation pass. See `docs/HESITATION_MARKERS.md`.
 - Added opt-in Korean-aware **claim assembly** (`youtube_intel.sentence_assembly`,
   `youtube-intel package --claim-assembly sentence`). Merges punctuation-free
   caption cues into sentence-like units before claim extraction, so claims are
