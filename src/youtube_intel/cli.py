@@ -88,6 +88,7 @@ def cmd_package(args: argparse.Namespace) -> int:
         segments=segments,
         duration_seconds=args.duration_seconds or video.get("duration_seconds"),
         genre_override=args.genre,
+        claim_assembly=args.claim_assembly,
     )
     validation = validate_package(package).to_dict()
     out = Path(args.out)
@@ -245,6 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--language")
     p.add_argument("--duration-seconds", type=int)
     p.add_argument("--genre")
+    p.add_argument(
+        "--claim-assembly",
+        choices=["cue", "sentence"],
+        default="cue",
+        help="cue (default): one claim per segment. sentence: merge consecutive "
+        "cues into Korean-aware sentence units before extracting claims.",
+    )
     p.set_defaults(func=cmd_package)
 
     p = sub.add_parser("worth", help="Build analysis-worth JSON and Markdown from a residual package.")

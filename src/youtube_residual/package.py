@@ -23,6 +23,7 @@ class ResidualClaimPackage:
     main_summary: MainSummary | None = None
     duration_seconds: int | None = None
     schema_version: str = "youtube_residual_v0.1"
+    claim_assembly: str = "cue"
 
     @property
     def aside_candidates(self) -> list[ClaimCandidate]:
@@ -38,6 +39,7 @@ class ResidualClaimPackage:
     def to_dict(self) -> dict:
         return {
             "schema_version": self.schema_version,
+            "claim_assembly": self.claim_assembly,
             "video": {
                 "video_id": self.video_id,
                 "title": self.title,
@@ -70,6 +72,39 @@ def _looks_mojibake(text: str) -> bool:
     return False
 
 
+def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
+    """Merge consecutive segment dicts into sentence-like segment dicts.
+
+    Treats each incoming segment as one transcript cue and applies the Korean
+    sentence assembler. Speaker / source_hint / modality_source are inherited
+    from the first cue of each merged unit; ``time_ref`` spans from the first
+    cue. Traceability fields (``source_time_refs``) are attached so the merged
+    text still resolves to the original cue timestamps. Pure and deterministic.
+    """
+    from youtube_intel.sentence_assembly import Cue, assemble_sentences, parse_timestamp
+
+    cues: list[Cue] = []
+    for i, seg in enumerate(segments):
+        start = parse_timestamp(seg.get("time_ref"))
+        cues.append(Cue(index=i, text=str(seg.get("text", "") or ""), start=start, end=start))
+    units = assemble_sentences(cues)
+
+    out: list[dict] = []
+    for unit in units:
+        first = segments[unit.cue_indices[0]]
+        out.append(
+            {
+                "text": unit.text,
+                "speaker": first.get("speaker"),
+                "time_ref": first.get("time_ref"),
+                "source_hint": first.get("source_hint", "transcript"),
+                "modality_source": first.get("modality_source", "transcript"),
+                "source_time_refs": [segments[i].get("time_ref") for i in unit.cue_indices],
+            }
+        )
+    return out
+
+
 def build_residual_package(
     *,
     video_id: str,
@@ -78,17 +113,30 @@ def build_residual_package(
     segments: list[dict],
     duration_seconds: int | None = None,
     genre_override: str | None = None,
+    claim_assembly: str = "cue",
 ) -> ResidualClaimPackage:
     """Build a package from segment dicts.
 
     Each segment dict: {text, speaker?, time_ref?, modality_source?}.
     Claim ids are globally sequential across segments.
 
+    ``claim_assembly`` = ``"cue"`` (default) keeps the current per-segment
+    behavior byte-identical. ``"sentence"`` first merges consecutive segments
+    into sentence-like units (Korean-aware) before extracting candidates, so a
+    caption-fragment stream becomes fuller claim sentences (see
+    docs/CLAIM_ASSEMBLY.md).
+
     The package now also carries:
     - detected genre (or override) -> drives required output sections
     - main_summary scaffold -> preserves central content alongside asides
     - duration_seconds -> enables coverage / ultra_long_handling rubric checks
     """
+    if claim_assembly not in ("cue", "sentence"):
+        raise ValueError(f"claim_assembly must be 'cue' or 'sentence', got {claim_assembly!r}")
+    sentence_mode = claim_assembly == "sentence"
+    if sentence_mode:
+        segments = assemble_segments_to_sentences(segments)
+
     candidates: list[ClaimCandidate] = []
     next_index = 1
     for seg in segments:
@@ -99,6 +147,7 @@ def build_residual_package(
             source_hint=seg.get("source_hint", "transcript"),
             modality_source=seg.get("modality_source", "transcript"),
             start_index=next_index,
+            presplit=not sentence_mode,
         )
         candidates.extend(seg_candidates)
         next_index += len(seg_candidates)
@@ -118,6 +167,7 @@ def build_residual_package(
         genre=genre,
         main_summary=main_summary,
         duration_seconds=duration_seconds,
+        claim_assembly=claim_assembly,
     )
 
 

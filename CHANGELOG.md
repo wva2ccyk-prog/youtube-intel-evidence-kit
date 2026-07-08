@@ -9,6 +9,13 @@ leaves alpha. For low-level implementation notes see
 ## [Unreleased]
 
 ### Added
+- Added opt-in Korean-aware **claim assembly** (`youtube_intel.sentence_assembly`,
+  `youtube-intel package --claim-assembly sentence`). Merges punctuation-free
+  caption cues into sentence-like units before claim extraction, so claims are
+  whole thoughts rather than mid-sentence fragments — the input-quality
+  prerequisite for roadmap step 1 (claim normalization). Default `cue` is
+  byte-identical to prior behavior; deterministic, stdlib-only, and it preserves
+  cue-index/timestamp traceability. See `docs/CLAIM_ASSEMBLY.md`.
 - Added stance-derived cross-video opinion groups to `TopicCollection` output.
   Opinion groups roll claim groups up into supporting, challenging,
   alternative, and reported position buckets without ranking truth.

@@ -6,6 +6,13 @@ The public `topic-demo` is a deterministic synthetic contract demo. It is intent
 
 Implement `normalize_claim(text)` that returns canonical text, detected numbers/units, negation markers, domain keywords, and uncertainty markers. Start with deterministic rules and domain synonym tables before adding embeddings.
 
+**Landed (input-quality prerequisite):** opt-in claim assembly merges
+punctuation-free caption cues into sentence-like units before extraction, so
+`normalize_claim` operates on whole thoughts rather than mid-sentence fragments.
+See [CLAIM_ASSEMBLY.md](CLAIM_ASSEMBLY.md) (`youtube_intel.sentence_assembly`,
+`--claim-assembly sentence`). Default stays `cue`; promotion is a data-driven
+operator decision.
+
 ## 2. Semantic grouping
 
 Implement `group_claims(claims)` in stages:

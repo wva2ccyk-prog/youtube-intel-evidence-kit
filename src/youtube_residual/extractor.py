@@ -85,15 +85,24 @@ def build_claim_candidates(
     modality_source: str = "transcript",
     id_prefix: str = "C",
     start_index: int = 1,
+    presplit: bool = True,
 ) -> list[ClaimCandidate]:
     """Extract claim candidates from a text unit (e.g. one segment).
 
     Each sentence becomes a candidate carrying two-axis classification + aside
     signal. speaker/time_ref are passed through (a diarization/segment stage
     supplies them upstream).
+
+    ``presplit`` (default True) runs the deterministic sentence splitter. Pass
+    False when ``text`` is already one assembled sentence unit (opt-in
+    claim_assembly="sentence") and must map to exactly one candidate.
     """
     candidates: list[ClaimCandidate] = []
-    sentences = split_into_claim_candidates(text)
+    if presplit:
+        sentences = split_into_claim_candidates(text)
+    else:
+        stripped = text.strip()
+        sentences = [stripped] if stripped else []
     for i, sentence in enumerate(sentences, start=start_index):
         axes = classify_axes(sentence, source_hint=source_hint)
         aside = detect_aside_signal(sentence)
