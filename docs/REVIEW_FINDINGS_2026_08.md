@@ -10,6 +10,9 @@ verified, not as facts.
 Audit environment: macOS, CPython 3.14.6, `pip install -e .[dev]`, commit
 `41f504d` on `main`.
 
+Step-by-step remediation for everything below, with verified diffs, is in
+`REVIEW_FIX_GUIDE_2026_08.md`.
+
 ## What Holds Up
 
 These claims were checked and are accurate:
@@ -199,6 +202,34 @@ permanently-unavailable entries. Either drop them from `PLUGIN_SPECS` or mark
 them explicitly as external/private integrations so `doctor` output is not
 misleading noise.
 
+### P2-5 Short Korean markers match inside longer compounds
+
+Found while validating the Korean tokenization fix, so it is not in the original
+finding set. `claim_axes._scan` does unconditional substring matching, and the
+`medical_advice` marker `용량` ("dosage") matches inside `사용량` ("usage
+volume"):
+
+| Input | Classified as |
+|---|---|
+| `이 센서를 도입하면 물 사용량을 20퍼센트 줄일 수 있습니다` | `medical_advice` |
+| `서버 사용량이 급증했다` | `medical_advice` |
+| `이 배터리는 용량이 크다` | `medical_advice` |
+| `이 앱의 보안 설계를 설명한다` | `product_recommendation` |
+
+This is not cosmetic. `content_type` feeds `HIGH_VALUE_TYPES` in
+`analysis_worth.py:243`, and `medical_advice` is a member, so a misclassified
+irrigation claim inflates the high-value count and changes cost-gate output —
+the gate that decides whether to spend on ASR, OCR, or source verification. It
+also leaks into operator-visible labels: a Korean fixture produced the group
+label `"센서 Medical Advice 도입 사용량"`, which is how the bug surfaced.
+
+`_CONTENT_MARKERS` holds many other short entries (`보안`, `분류`, `회귀`,
+`지문`, `무게`) with the same mid-compound exposure, so the three observed cases
+are unlikely to be the only ones. Fix direction and a verified patch are in the
+fix guide; the durable fix is to require two independent markers before assigning
+a high-risk `content_type`, since single-marker matches are where false positives
+concentrate.
+
 ### P2-4 Two dead code paths
 
 - `youtube_ops_cli.py` exists twice: the root copy inserts `src` into
@@ -249,6 +280,10 @@ misleading noise.
 5. P3: single canonical status string, fix the activation lines, cut a `v0.1.0`
    tag or drop the dead links.
 6. P2-3 and P2-4: prune private-tree plugin references and dead modules.
+
+`REVIEW_FIX_GUIDE_2026_08.md` breaks this into nine independently committable
+tasks with verified diffs, measured before/after numbers, and the tests to add
+for each.
 
 ## Audit Method
 

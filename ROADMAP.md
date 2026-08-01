@@ -11,6 +11,8 @@ Status legend: `planned`, `exploring`, `done`.
 An independent audit of this repository (run-verified, not doc-derived) is in
 `docs/REVIEW_FINDINGS_2026_08.md`. The correctness items below come from it and
 take priority over feature work.
+Step-by-step remediation with verified diffs is in
+`docs/REVIEW_FIX_GUIDE_2026_08.md`.
 
 ## Correctness first (blocking)
 
@@ -38,6 +40,12 @@ steps.
   pairs score `0.0`–`0.19` and fall below the grouping threshold. Add this to
   `TOPIC_LIMITATIONS` so it appears in every handoff bundle, then make the length
   filter language-aware.
+- `planned` **Stop short Korean markers from matching inside compounds.**
+  `claim_axes._scan` matches the `medical_advice` marker `용량` inside `사용량`,
+  so an irrigation or battery claim classifies as medical advice. Because
+  `content_type` feeds `HIGH_VALUE_TYPES`, this changes analysis-worth cost-gate
+  output, and it leaks into operator-visible group labels. The durable fix is to
+  require two independent markers before assigning a high-risk `content_type`.
 
 ## Near term
 
