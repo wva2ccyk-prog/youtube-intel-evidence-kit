@@ -871,19 +871,25 @@ def build_topic_collection(
     # Fail closed before any grouping work: duplicate, empty, reserved-fallback,
     # or dangling identifiers must never silently overwrite each other.
     assert_topic_inputs_valid(records)
+    # Hash the ORIGINAL inputs before any transformation so the recorded hashes
+    # describe the actual inputs, never mutated copies.
+    input_record_hashes = [_stable_json_hash(r) for r in records]
+    # Work only on deep copies: clustering assigns claim_group_key /
+    # claim_group_label / normalized_tokens, and those writes must never leak
+    # back into the caller's VideoKnowledgeRecord objects.
     all_claims: list[dict[str, Any]] = []
     videos: dict[str, dict[str, Any]] = {}
     evidence_index: dict[str, dict[str, Any]] = {}
     for record in records:
         video = record.get("video") or {}
         video_id = _text(video.get("video_id"), "unknown-video")
-        videos[video_id] = video
+        videos[video_id] = copy.deepcopy(video)
         for evidence in _as_list(record.get("evidence_records")):
             if isinstance(evidence, dict):
-                evidence_index[_text(evidence.get("evidence_id"), "unknown-evidence")] = evidence
+                evidence_index[_text(evidence.get("evidence_id"), "unknown-evidence")] = copy.deepcopy(evidence)
         for claim in _as_list(record.get("claim_records")):
             if isinstance(claim, dict):
-                all_claims.append(claim)
+                all_claims.append(copy.deepcopy(claim))
 
     grouped = _cluster_claims(all_claims, clusterer, token_jaccard_threshold=token_jaccard_threshold)
 
@@ -1015,7 +1021,7 @@ def build_topic_collection(
             "builder": "youtube_intel.topic_collection.build_topic_collection",
             "builder_version": "v0.1",
             "created_at_utc": _now_utc(),
-            "input_record_hashes": [_stable_json_hash(r) for r in records],
+            "input_record_hashes": input_record_hashes,
             "alpha_contract_demo": True,
         },
         "limitations": TOPIC_LIMITATIONS,
