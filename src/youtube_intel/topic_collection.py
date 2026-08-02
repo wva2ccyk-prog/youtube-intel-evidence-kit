@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .errors import EvidenceIntegrityError
+from .errors import EvidenceIntegrityError, InvalidInputError
 from .io_utils import read_json, write_json, write_text
 from youtube_residual import build_residual_package, validate_package
 
@@ -842,6 +842,8 @@ def validate_topic_inputs(records: list[dict[str, Any]]) -> list[str]:
     with an :class:`EvidenceIntegrityError` when any issue is found.
     """
     issues: list[str] = []
+    if not records:
+        return ["no video records provided; an empty TopicCollection must not be built"]
 
     claims: list[dict[str, Any]] = []
     evidence_records: list[dict[str, Any]] = []
@@ -973,6 +975,10 @@ def build_topic_collection(
             if isinstance(claim, dict):
                 all_claims.append(copy.deepcopy(claim))
 
+    if not all_claims:
+        raise InvalidInputError(
+            "no claim records were provided; refusing to build an empty TopicCollection"
+        )
     grouped = _cluster_claims(all_claims, clusterer, token_jaccard_threshold=token_jaccard_threshold)
 
     claim_groups: list[dict[str, Any]] = []
@@ -1436,13 +1442,24 @@ def build_topic_demo_from_segments(
     clusterer: str = "normalized",
     token_jaccard_threshold: float = 0.5,
 ) -> dict[str, Any]:
+    topic_dir = Path(topic_dir)
+    if not topic_dir.is_dir():
+        raise InvalidInputError(f"topic directory does not exist: {topic_dir}")
+    segments_files = sorted(topic_dir.glob("video_*.json"))
+    if not segments_files:
+        raise InvalidInputError(f"no video_*.json files found in topic directory: {topic_dir}")
     records: list[dict[str, Any]] = []
     package_paths: list[str] = []
     validation_paths: list[str] = []
-    for segments_file in sorted(topic_dir.glob("video_*.json")):
+    for segments_file in segments_files:
         data = read_json(segments_file, {})
+        if not isinstance(data, dict) or not isinstance(data.get("segments"), list) or not data["segments"]:
+            raise InvalidInputError(
+                f"topic segments file {segments_file} is empty or malformed "
+                f"(expected an object with a non-empty segments list)"
+            )
         video = data.get("video") if isinstance(data.get("video"), dict) else {}
-        segments = data.get("segments") if isinstance(data.get("segments"), list) else []
+        segments = data["segments"]
         package = build_residual_package(
             video_id=_text(video.get("video_id"), segments_file.stem),
             title=_text(video.get("title"), segments_file.stem),
@@ -1452,12 +1469,20 @@ def build_topic_demo_from_segments(
             genre_override=video.get("genre"),
         )
         validation = validate_package(package).to_dict()
+        if validation["status"] != "pass":
+            raise InvalidInputError(
+                f"source package validation failed for {segments_file}: "
+                + "; ".join(validation["issues"][:8])
+            )
         package_dict = package.to_dict()
         pkg_path = write_json(output_dir / "packages" / f"{package.video_id}_residual_package.json", package_dict)
         val_path = write_json(output_dir / "packages" / f"{package.video_id}_validation.json", validation)
         package_paths.append(str(pkg_path))
         validation_paths.append(str(val_path))
         records.append(build_video_knowledge_record(package_dict, topic_id=topic_id, topic_title=topic_title))
+
+    if not records:
+        raise InvalidInputError("no valid video records were produced from the topic directory")
 
     collection = build_topic_collection(
         records,
@@ -1466,6 +1491,8 @@ def build_topic_demo_from_segments(
         clusterer=clusterer,
         token_jaccard_threshold=token_jaccard_threshold,
     )
+    if not collection.get("claim_groups") or collection.get("claim_total", 0) == 0:
+        raise InvalidInputError("no claims were produced from the topic directory")
     expected_path = topic_dir / "expected_groupings.json"
     if expected_path.exists():
         evaluation = evaluate_topic_collection(collection, read_json(expected_path, {}) or {})

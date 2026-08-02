@@ -124,3 +124,110 @@ def test_hesitation_demo_command(tmp_path):
     # Korean filler content survives round-trip.
     md = (out / "hesitation_markers.md").read_text(encoding="utf-8")
     assert "audio" in md
+
+
+# --- P1-E: timestamp validation hardening ------------------------------------
+
+
+def _four_bad_rows() -> list[dict]:
+    return [
+        {"word": "w1", "start": "not-a-number", "end": 1.0},
+        {"word": "w2", "start": 0.0, "end": None},
+        {"word": "w3", "start": 0.4, "end": 0.2},  # reversed range
+        {"word": "w4", "start": -1.0, "end": 0.5},  # negative start
+    ]
+
+
+def test_malformed_rows_do_not_satisfy_minimum_word_count() -> None:
+    """Four malformed rows used to satisfy MIN_WORDS_FOR_MARKER while pause
+    analysis saw zero valid rows; the claim must now be insufficient."""
+    row = analyze_claim_words("c1", _four_bad_rows())
+    assert row["word_count"] == 0
+    assert row["malformed_word_count"] == 4
+    assert row["marker"] == MARKER_INSUFFICIENT
+    reasons = sorted(m["reason"] for m in row["malformed_words"])
+    assert "missing_timestamp" in reasons
+    assert "non_numeric_timestamp" in reasons
+    assert "reversed_range" in reasons
+    assert "negative_timestamp" in reasons
+
+
+def test_mixed_valid_and_malformed_rows_count_only_valid() -> None:
+    words = [_w("a", 0.0, 0.2), _w("b", 0.2, 0.4), _w("bad", 0.5, 0.1), _w("c", 0.4, 0.6), _w("d", 0.6, 0.8)]
+    row = analyze_claim_words("c1", words)
+    assert row["word_count"] == 4
+    assert row["malformed_word_count"] == 1
+    assert row["marker"] == MARKER_NONE  # exactly 4 valid words, no markers
+
+
+def test_negative_duration_rejected() -> None:
+    row = analyze_claim_words("c1", [_w("a", 0.0, -0.5), _w("b", 0.2, 0.4), _w("c", 0.4, 0.6), _w("d", 0.6, 0.8)])
+    assert row["malformed_word_count"] == 1
+    assert row["malformed_words"][0]["reason"] == "negative_timestamp"
+    assert row["word_count"] == 3
+
+
+def test_zero_duration_duplicate_timestamps_rejected() -> None:
+    # start == end rows (duplicate/instant timestamps) are unusable timing data.
+    words = [_w("a", 0.0, 0.0), _w("b", 0.0, 0.0), _w("c", 0.2, 0.5), _w("d", 0.5, 0.9)]
+    row = analyze_claim_words("c1", words)
+    assert row["word_count"] == 2
+    assert row["malformed_word_count"] == 2
+    assert all(m["reason"] == "zero_duration" for m in row["malformed_words"])
+
+
+def test_overlapping_timestamps_reported() -> None:
+    words = [_w("a", 0.0, 0.8), _w("b", 0.3, 0.6), _w("c", 0.9, 1.2)]
+    row = analyze_claim_words("c1", words)
+    assert len(row["overlapping_pairs"]) == 1
+    pair = row["overlapping_pairs"][0]
+    assert pair["left_word"] == "a"
+    assert pair["right_word"] == "b"
+
+
+def test_all_invalid_claim_is_insufficient_not_clean() -> None:
+    row = analyze_claim_words("c1", _four_bad_rows())
+    assert row["marker"] == MARKER_INSUFFICIENT
+
+
+# --- P0-D: hesitation-demo fail-closed ---------------------------------------
+
+
+def test_hesitation_demo_missing_fixture_fails_closed(tmp_path, capsys):
+    from youtube_intel.cli import main
+
+    rc = main(["hesitation-demo", "--fixture", str(tmp_path / "missing.json"), "--out", str(tmp_path / "out")])
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"] == "InvalidInputError"
+    assert not (tmp_path / "out" / "hesitation_markers.json").exists()
+
+
+def test_hesitation_demo_empty_fixture_fails_closed(tmp_path, capsys):
+    from youtube_intel.cli import main
+
+    fixture = tmp_path / "empty.json"
+    fixture.write_text("{}", encoding="utf-8")
+    rc = main(["hesitation-demo", "--fixture", str(fixture), "--out", str(tmp_path / "out")])
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["error"] == "InvalidInputError"
+    assert not (tmp_path / "out" / "hesitation_markers.json").exists()
+
+
+def test_hesitation_demo_all_invalid_claims_fails_closed(tmp_path, capsys):
+    from youtube_intel.cli import main
+
+    fixture = tmp_path / "all_bad.json"
+    fixture.write_text(
+        json.dumps({"claims": [{"claim_id": "c1", "words": _four_bad_rows()}]}),
+        encoding="utf-8",
+    )
+    rc = main(["hesitation-demo", "--fixture", str(fixture), "--out", str(tmp_path / "out")])
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "no valid word-timestamp rows" in payload["message"]
+    assert not (tmp_path / "out" / "hesitation_markers.json").exists()

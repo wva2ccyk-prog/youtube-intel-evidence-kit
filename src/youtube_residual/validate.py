@@ -42,6 +42,18 @@ def validate_package(package: ResidualClaimPackage) -> ValidationResult:
     if not package.title or not package.title.strip():
         issues.append("video.title is empty")
 
+    # --- identity contract ---
+    if not package.video_id or not package.video_id.strip():
+        issues.append("video.video_id is empty")
+    elif package.video_id in ("unknown-video",):
+        issues.append("video.video_id uses the reserved fallback value 'unknown-video'")
+
+    # --- content contract: no claims means no package ---
+    if not package.claim_candidates:
+        issues.append("no claim candidates were extracted (segments are empty or all segment text is empty)")
+    elif all(not str(c.text or "").strip() for c in package.claim_candidates):
+        issues.append("every claim candidate has empty text (all segment text is empty)")
+
     # --- schema_version pin ---
     if not package.schema_version:
         issues.append("schema_version is not pinned")

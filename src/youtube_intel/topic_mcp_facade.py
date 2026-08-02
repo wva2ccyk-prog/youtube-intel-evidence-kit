@@ -5,9 +5,30 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .errors import InvalidInputError
+
 
 def load_topic_collection(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """Load and structurally validate a TopicCollection JSON document.
+
+    An empty object, a non-object, or a document without the TopicCollection
+    contract fields must never become a plausible topic summary through
+    default values, so the facade rejects it before any tool answers.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise InvalidInputError(f"{path} does not contain a TopicCollection object")
+    if data.get("analysis_layer") != "cross_video_topic_collection":
+        raise InvalidInputError(
+            f"{path} is not a TopicCollection (missing analysis_layer='cross_video_topic_collection')"
+        )
+    if not isinstance(data.get("claim_groups"), list) or not data["claim_groups"]:
+        raise InvalidInputError(f"{path} TopicCollection has no claim groups")
+    if not isinstance(data.get("claim_index"), dict) or not data["claim_index"]:
+        raise InvalidInputError(f"{path} TopicCollection has an empty claim_index")
+    if not isinstance(data.get("claim_total"), int) or data["claim_total"] <= 0:
+        raise InvalidInputError(f"{path} TopicCollection has no claims (claim_total <= 0)")
+    return data
 
 
 def topic_summary(collection: dict[str, Any]) -> dict[str, Any]:

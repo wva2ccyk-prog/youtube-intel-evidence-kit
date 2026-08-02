@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .errors import InvalidInputError
 from .io_utils import read_json, write_json, write_text
 from .reporting import render_analysis_worth_markdown
 
@@ -315,8 +316,17 @@ def build_analysis_worth(
     metadata = read_json(run_path / "metadata.json", {}) if run_path else {}
     if package_path is None and run_path:
         package_path = run_path / "residual" / "package.json"
-
+    if package_path is None:
+        raise InvalidInputError(
+            "worth requires one valid source: --package, or a valid --run-dir "
+            "containing the expected package"
+        )
     package = _read_package(package_path)
+    if not package or not _as_list(package.get("claim_candidates")):
+        raise InvalidInputError(
+            f"worth requires a non-empty residual package with claim candidates; "
+            f"{package_path} is empty, missing, or malformed"
+        )
     compare = [_read_package(path) for path in compare_packages or []]
     duplicate = _duplicate_report(package, [item for item in compare if item])
     decision = _decide(package, duplicate, metadata)

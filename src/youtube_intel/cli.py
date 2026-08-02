@@ -87,6 +87,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_package(args: argparse.Namespace) -> int:
     video, segments = _load_segment_input(Path(args.segments))
+    if not segments:
+        raise InvalidInputError(
+            f"segments file {args.segments} has no segments; refusing to build an empty package"
+        )
     package = build_residual_package(
         video_id=args.video_id or video.get("video_id") or "synthetic-field-demo",
         title=args.title or video.get("title") or "Synthetic Orchard Sensor Field Notes",
@@ -201,6 +205,11 @@ def cmd_hesitation_demo(args: argparse.Namespace) -> int:
     fixture = Path(args.fixture) if args.fixture else _repo_root() / "examples" / "synthetic_hesitation.json"
     data = read_json(fixture, {})
     claims = data.get("claims", []) if isinstance(data, dict) else []
+    if not isinstance(claims, list) or not claims:
+        raise InvalidInputError(
+            f"hesitation fixture {fixture} is missing, empty, or malformed "
+            f"(expected an object with a non-empty claims list)"
+        )
     rows = [
         analyze_claim_words(
             c.get("claim_id", f"C{i:03d}"),
@@ -211,6 +220,12 @@ def cmd_hesitation_demo(args: argparse.Namespace) -> int:
         )
         for i, c in enumerate(claims, start=1)
     ]
+    if all(row["word_count"] == 0 for row in rows):
+        raise InvalidInputError(
+            f"no valid word-timestamp rows remain in hesitation fixture {fixture}: "
+            f"every claim is invalid (missing, non-numeric, negative, reversed, "
+            f"or zero-duration timestamps)"
+        )
     artifact = build_markers_artifact(
         rows,
         provenance={"source": "synthetic_fixture", "fixture": str(fixture), "backend": "none_synthetic"},
