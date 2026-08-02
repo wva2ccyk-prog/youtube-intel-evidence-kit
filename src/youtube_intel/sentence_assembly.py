@@ -29,6 +29,7 @@ Heuristics (see docs/CLAIM_ASSEMBLY.md)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 __all__ = [
     "Cue",
@@ -101,22 +102,40 @@ class Cue:
     ``index`` is the cue's position in the source cue stream; it is preserved on
     the assembled unit so traceability back to evidence records is exact.
     ``start``/``end`` are seconds (float) or None when timing is unavailable.
+
+    ``speaker`` / ``modality_source`` / ``source_hint`` carry per-cue provenance.
+    When any of these change between two consecutive cues, assembly FORCES a
+    boundary: a merged sentence must never attribute another speaker's words,
+    another modality's text, or a different evidence source to the first cue.
     """
 
     index: int
     text: str
     start: float | None = None
     end: float | None = None
+    speaker: Any = None
+    modality_source: Any = None
+    source_hint: Any = None
 
 
 @dataclass(slots=True)
 class AssembledUnit:
-    """A sentence-like unit merged from one or more consecutive cues."""
+    """A sentence-like unit merged from one or more consecutive cues.
+
+    ``speaker`` / ``modality_source`` / ``source_hint`` are the provenance of the
+    unit's cues (identical for every cue in the unit, because provenance changes
+    force boundaries). ``source_time_refs`` keeps the full per-cue timing list so
+    the merged text still resolves to every original timestamp.
+    """
 
     text: str
     start: float | None
     end: float | None
     cue_indices: list[int] = field(default_factory=list)
+    speaker: Any = None
+    modality_source: Any = None
+    source_hint: Any = None
+    source_time_refs: list[float | None] = field(default_factory=list)
 
     @property
     def span_seconds(self) -> float | None:
@@ -135,11 +154,41 @@ class AssembledUnit:
             "end": self.end,
             "cue_indices": list(self.cue_indices),
             "cue_count": len(self.cue_indices),
+            "speaker": self.speaker,
+            "modality_source": self.modality_source,
+            "source_hint": self.source_hint,
+            "source_time_refs": list(self.source_time_refs),
         }
 
 
 def _norm(text: str) -> str:
     return " ".join(text.split())
+
+
+def _norm_provenance(value: Any) -> Any:
+    """Normalize a provenance value for change detection.
+
+    Missing/blank/``unknown`` values all collapse to ``None`` so that absent
+    metadata never fabricates a boundary. Two distinct non-blank values are a
+    real provenance change and force a boundary.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"unknown", "n/a", "na", "none"}:
+        return None
+    return text
+
+
+def _provenance_changed(previous: Cue, current: Cue) -> bool:
+    """True when speaker, modality, or source hint changed between cues."""
+    if _norm_provenance(previous.speaker) != _norm_provenance(current.speaker):
+        return True
+    if _norm_provenance(previous.modality_source) != _norm_provenance(current.modality_source):
+        return True
+    if _norm_provenance(previous.source_hint) != _norm_provenance(current.source_hint):
+        return True
+    return False
 
 
 def _flush(buffer: list[Cue]) -> AssembledUnit | None:
@@ -150,11 +199,16 @@ def _flush(buffer: list[Cue]) -> AssembledUnit | None:
     ends = [c.end for c in buffer if c.end is not None]
     start = starts[0] if starts else None
     end = ends[-1] if ends else None
+    first = buffer[0]
     return AssembledUnit(
         text=text,
         start=start,
         end=end,
         cue_indices=[c.index for c in buffer],
+        speaker=first.speaker,
+        modality_source=first.modality_source,
+        source_hint=first.source_hint,
+        source_time_refs=[c.start for c in buffer],
     )
 
 
@@ -177,6 +231,14 @@ def assemble_sentences(
         piece = _norm(cue.text)
         if not piece:
             continue
+        # Provenance change: flush the previous buffer BEFORE the new cue is
+        # appended, so the new speaker/modality/source starts its own unit.
+        if buffer and _provenance_changed(buffer[-1], cue):
+            unit = _flush(buffer)
+            if unit is not None:
+                units.append(unit)
+            buffer = []
+            running_chars = 0
         buffer.append(cue)
         running_chars += len(piece) + (1 if len(buffer) > 1 else 0)
 

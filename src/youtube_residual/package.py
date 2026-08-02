@@ -76,17 +76,29 @@ def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
     """Merge consecutive segment dicts into sentence-like segment dicts.
 
     Treats each incoming segment as one transcript cue and applies the Korean
-    sentence assembler. Speaker / source_hint / modality_source are inherited
-    from the first cue of each merged unit; ``time_ref`` spans from the first
-    cue. Traceability fields (``source_time_refs``) are attached so the merged
-    text still resolves to the original cue timestamps. Pure and deterministic.
+    sentence assembler. Speaker / source_hint / modality_source changes FORCE an
+    assembly boundary, so a merged unit never spans two speakers, two
+    modalities, or two evidence sources. Traceability fields
+    (``source_time_refs``, ``cue_indices``, ``span_start``, ``span_end``) are
+    attached so the merged text still resolves to the original cue timestamps
+    and source cue indices. Pure and deterministic.
     """
     from youtube_intel.sentence_assembly import Cue, assemble_sentences, parse_timestamp
 
     cues: list[Cue] = []
     for i, seg in enumerate(segments):
         start = parse_timestamp(seg.get("time_ref"))
-        cues.append(Cue(index=i, text=str(seg.get("text", "") or ""), start=start, end=start))
+        cues.append(
+            Cue(
+                index=i,
+                text=str(seg.get("text", "") or ""),
+                start=start,
+                end=start,
+                speaker=seg.get("speaker"),
+                modality_source=seg.get("modality_source"),
+                source_hint=seg.get("source_hint"),
+            )
+        )
     units = assemble_sentences(cues)
 
     out: list[dict] = []
@@ -100,6 +112,9 @@ def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
                 "source_hint": first.get("source_hint", "transcript"),
                 "modality_source": first.get("modality_source", "transcript"),
                 "source_time_refs": [segments[i].get("time_ref") for i in unit.cue_indices],
+                "cue_indices": list(unit.cue_indices),
+                "span_start": unit.start,
+                "span_end": unit.end,
             }
         )
     return out
@@ -148,6 +163,10 @@ def build_residual_package(
             modality_source=seg.get("modality_source", "transcript"),
             start_index=next_index,
             presplit=not sentence_mode,
+            cue_indices=seg.get("cue_indices"),
+            source_time_refs=seg.get("source_time_refs"),
+            span_start=seg.get("span_start"),
+            span_end=seg.get("span_end"),
         )
         candidates.extend(seg_candidates)
         next_index += len(seg_candidates)

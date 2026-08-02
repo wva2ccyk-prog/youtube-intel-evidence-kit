@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from .aside_signals import AsideSignal, detect_aside_signal
 from .claim_axes import ClaimAxes, classify_axes
@@ -28,7 +29,14 @@ _CONTINUATION_ENDINGS = ("주요", "바로", "또 다른", "이러한", "이런"
 
 @dataclass(slots=True)
 class ClaimCandidate:
-    """One extracted claim candidate with both axes and aside signal."""
+    """One extracted claim candidate with both axes and aside signal.
+
+    ``cue_indices`` / ``source_time_refs`` / ``span_start`` / ``span_end`` /
+    ``source_hint`` carry the full cue-level provenance of an assembled
+    sentence unit (see ``assemble_segments_to_sentences``). They are empty/None
+    for the default per-cue path, and are serialized so downstream records keep
+    exact speaker/timestamp/modality/source-cue traceability.
+    """
 
     claim_id: str
     text: str
@@ -37,6 +45,11 @@ class ClaimCandidate:
     axes: ClaimAxes
     aside: AsideSignal
     modality_source: str = "transcript"  # transcript|audio|visual|ocr|mixed
+    source_hint: str | None = None
+    cue_indices: list[int] = field(default_factory=list)
+    source_time_refs: list[Any] = field(default_factory=list)
+    span_start: float | None = None
+    span_end: float | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -45,6 +58,11 @@ class ClaimCandidate:
             "speaker": self.speaker,
             "time_ref": self.time_ref,
             "modality_source": self.modality_source,
+            "source_hint": self.source_hint,
+            "cue_indices": list(self.cue_indices),
+            "source_time_refs": list(self.source_time_refs),
+            "span_start": self.span_start,
+            "span_end": self.span_end,
             "content_type": self.axes.content_type,
             "evidence": self.axes.evidence,
             "confidence": self.axes.confidence,
@@ -86,6 +104,10 @@ def build_claim_candidates(
     id_prefix: str = "C",
     start_index: int = 1,
     presplit: bool = True,
+    cue_indices: list[int] | None = None,
+    source_time_refs: list[Any] | None = None,
+    span_start: float | None = None,
+    span_end: float | None = None,
 ) -> list[ClaimCandidate]:
     """Extract claim candidates from a text unit (e.g. one segment).
 
@@ -96,6 +118,10 @@ def build_claim_candidates(
     ``presplit`` (default True) runs the deterministic sentence splitter. Pass
     False when ``text`` is already one assembled sentence unit (opt-in
     claim_assembly="sentence") and must map to exactly one candidate.
+
+    ``cue_indices`` / ``source_time_refs`` / ``span_start`` / ``span_end`` carry
+    the assembled sentence's cue-level provenance onto every candidate produced
+    from that sentence, so the serialized claim resolves to its source cues.
     """
     candidates: list[ClaimCandidate] = []
     if presplit:
@@ -115,6 +141,11 @@ def build_claim_candidates(
                 axes=axes,
                 aside=aside,
                 modality_source=modality_source,
+                source_hint=source_hint,
+                cue_indices=list(cue_indices or []),
+                source_time_refs=list(source_time_refs or []),
+                span_start=span_start,
+                span_end=span_end,
             )
         )
     return candidates
