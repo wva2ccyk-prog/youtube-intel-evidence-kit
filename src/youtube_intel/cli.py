@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from youtube_intel.analysis_worth import build_analysis_worth
+from youtube_intel.errors import InvalidInputError
 from youtube_intel.hesitation_markers import (
     analyze_claim_words,
     build_markers_artifact,
@@ -338,7 +339,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except InvalidInputError as exc:
+        # Expected input failures (missing, empty, malformed, inconsistent)
+        # render as structured JSON with exit code 2 -- never a traceback and
+        # never a misleading ok:true artifact. Programming errors are not
+        # caught here.
+        return _print({"ok": False, "error": "InvalidInputError", "message": str(exc)})
 
 
 if __name__ == "__main__":

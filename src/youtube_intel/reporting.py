@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .errors import InvalidInputError
 from .io_utils import read_json, write_json, write_text
 
 
@@ -197,6 +198,11 @@ def write_handoff_bundle(
     out = Path(output_dir)
     package = package or {}
     worth = worth or {}
+    if not package and not worth:
+        raise InvalidInputError(
+            "handoff requires a coherent input set: a residual package, an analysis-worth "
+            "artifact, or both. Refusing to write an empty handoff bundle."
+        )
     paths: dict[str, str] = {}
 
     if package:
@@ -209,14 +215,17 @@ def write_handoff_bundle(
     if overlay:
         paths["operator_overlay_json"] = str(write_json(out / "operator_overlay.json", overlay))
 
+    # Build the complete manifest (including its own path) BEFORE writing it,
+    # so the returned manifest and the on-disk manifest are identical.
+    manifest_path = out / "handoff_manifest.json"
+    paths["manifest_json"] = str(manifest_path)
     manifest = {
         "ok": True,
         "schema_version": "youtube_ai_handoff_bundle.v0.1",
         "limitations": PUBLIC_LIMITATIONS,
         "paths": paths,
     }
-    paths["manifest_json"] = str(write_json(out / "handoff_manifest.json", manifest))
-    manifest["paths"] = paths
+    write_json(manifest_path, manifest)
     return manifest
 
 
