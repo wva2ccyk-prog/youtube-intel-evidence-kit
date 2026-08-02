@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 from datetime import datetime, timezone
 import hashlib
@@ -8,6 +9,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from .errors import EvidenceIntegrityError
 from .io_utils import read_json, write_json, write_text
 from youtube_residual import build_residual_package, validate_package
 
@@ -735,6 +737,124 @@ def build_opinion_groups(
         warnings.append("opinion_group_builder_produced_no_groups")
     return opinion_groups, warnings
 
+# Reserved fallback identifiers: records must never rely on these, because two
+# records can silently collide on the same fallback value.
+RESERVED_FALLBACK_IDS = {"unknown-video", "unknown-evidence", "unknown-claim", "unknown-group"}
+
+
+def _local_claim_id(claim: dict[str, Any]) -> str:
+    """Local claim id: the record's field, or the ``video:local`` suffix."""
+    local = _text(claim.get("local_claim_id"), "")
+    if local:
+        return local
+    uid = _text(claim.get("claim_uid"), "")
+    return uid.rsplit(":", 1)[-1] if ":" in uid else uid
+
+
+def validate_topic_inputs(records: list[dict[str, Any]]) -> list[str]:
+    """Return integrity issues for a list of VideoKnowledgeRecord dicts.
+
+    Fails closed (returns a non-empty list) when identifiers are empty,
+    duplicated, or reserved-fallback, or when cross-references dangle or
+    declared counts disagree with actual arrays. The caller rejects the build
+    with an :class:`EvidenceIntegrityError` when any issue is found.
+    """
+    issues: list[str] = []
+
+    claims: list[dict[str, Any]] = []
+    evidence_records: list[dict[str, Any]] = []
+    local_ids_by_video: dict[str, set[str]] = defaultdict(set)
+    video_ids_in_claims: list[str] = []
+    video_ids_in_evidence: list[str] = []
+
+    for ri, record in enumerate(records):
+        if not isinstance(record, dict):
+            issues.append(f"record {ri} is not an object")
+            continue
+        video = record.get("video") or {}
+        video_id = _text(video.get("video_id"), "")
+        video_ids_in_claims.append(video_id)
+
+        record_claims = [c for c in _as_list(record.get("claim_records")) if isinstance(c, dict)]
+        record_evidence = [e for e in _as_list(record.get("evidence_records")) if isinstance(e, dict)]
+        counts = record.get("counts") or {}
+        if counts.get("claim_total") is not None and counts["claim_total"] != len(record_claims):
+            issues.append(
+                f"record {ri} (video {video_id!r}): declared claim_total {counts['claim_total']} "
+                f"!= actual claim_records {len(record_claims)}"
+            )
+        if counts.get("evidence_total") is not None and counts["evidence_total"] != len(record_evidence):
+            issues.append(
+                f"record {ri} (video {video_id!r}): declared evidence_total {counts['evidence_total']} "
+                f"!= actual evidence_records {len(record_evidence)}"
+            )
+
+        for claim in record_claims:
+            claim_uid = _text(claim.get("claim_uid"), "")
+            claim_source = _text(claim.get("source_video_id"), "")
+            if claim_source and claim_source != video_id:
+                issues.append(f"claim {claim_uid!r}: source_video_id {claim_source!r} does not match record video {video_id!r}")
+            local = _local_claim_id(claim)
+            if not local:
+                issues.append(f"claim {claim_uid!r}: local claim id is empty")
+            elif local in local_ids_by_video[video_id]:
+                issues.append(f"duplicate local claim id {local!r} within video {video_id!r}")
+            else:
+                local_ids_by_video[video_id].add(local)
+            claims.append(claim)
+
+        for evidence in record_evidence:
+            video_ids_in_evidence.append(_text(evidence.get("video_id"), ""))
+            evidence_records.append(evidence)
+
+    def _check_ids(label: str, values: list[str]) -> None:
+        seen: set[str] = set()
+        for value in values:
+            if not value:
+                issues.append(f"{label} is empty")
+            elif value in seen:
+                issues.append(f"duplicate {label}: {value}")
+            else:
+                seen.add(value)
+            if value in RESERVED_FALLBACK_IDS:
+                issues.append(f"{label} uses reserved fallback id: {value}")
+
+    _check_ids("video_id", video_ids_in_claims)
+    _check_ids("claim_uid", [_text(c.get("claim_uid"), "") for c in claims])
+    _check_ids("evidence_id", [_text(e.get("evidence_id"), "") for e in evidence_records])
+
+    video_ids = {vid for vid in video_ids_in_claims if vid and vid not in RESERVED_FALLBACK_IDS}
+    evidence_index = {_text(e.get("evidence_id"), ""): e for e in evidence_records}
+
+    for claim in claims:
+        claim_uid = _text(claim.get("claim_uid"), "")
+        source = _text(claim.get("source_video_id"), "")
+        if source and source not in video_ids:
+            issues.append(f"claim {claim_uid!r}: source_video_id {source!r} does not resolve to any video")
+        for eid in _as_list(claim.get("evidence_ids")):
+            eid = _text(eid, "")
+            if eid and eid not in evidence_index:
+                issues.append(f"claim {claim_uid!r}: evidence_id {eid!r} does not resolve")
+
+    for evidence in evidence_records:
+        eid = _text(evidence.get("evidence_id"), "")
+        owner = _text(evidence.get("video_id"), "")
+        if owner and owner not in video_ids:
+            issues.append(f"evidence {eid!r}: video_id {owner!r} does not resolve to any video")
+
+    return issues
+
+
+def assert_topic_inputs_valid(records: list[dict[str, Any]]) -> None:
+    """Raise :class:`EvidenceIntegrityError` when record identifiers are invalid."""
+    issues = validate_topic_inputs(records)
+    if issues:
+        raise EvidenceIntegrityError(
+            "topic input integrity check failed: " + "; ".join(issues[:8])
+            + (f" (+{len(issues) - 8} more)" if len(issues) > 8 else "")
+        )
+
+
 def build_topic_collection(
     records: list[dict[str, Any]],
     *,
@@ -748,6 +868,9 @@ def build_topic_collection(
     """Build a deterministic cross-video TopicCollection from records."""
     if clusterer not in CLUSTERERS:
         raise ValueError(f"Unsupported clusterer: {clusterer!r}. Choose from {CLUSTERERS}")
+    # Fail closed before any grouping work: duplicate, empty, reserved-fallback,
+    # or dangling identifiers must never silently overwrite each other.
+    assert_topic_inputs_valid(records)
     all_claims: list[dict[str, Any]] = []
     videos: dict[str, dict[str, Any]] = {}
     evidence_index: dict[str, dict[str, Any]] = {}
