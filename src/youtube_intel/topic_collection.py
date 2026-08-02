@@ -281,21 +281,51 @@ def _make_group_key_from_claims(claims: list[dict[str, Any]]) -> str:
     return "topic_" + "_".join(ranked)
 
 
-def _group_claims_by_similarity(claims: list[dict[str, Any]], threshold: float = 0.20) -> list[tuple[str, list[dict[str, Any]], float]]:
+def _sort_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deterministic claim order so clustering is invariant to input order.
+
+    claim_uid is globally unique (enforced by ``assert_topic_inputs_valid``),
+    so sorting on (claim_uid, text) makes the clustering result a pure
+    function of the claim set, never of the caller's list order.
+    """
+    return sorted(claims, key=lambda c: (_text(c.get("claim_uid"), ""), _text(c.get("text"), "")))
+
+
+COHESION_RULE = "complete_link_min_similarity"
+
+
+def _group_claims_by_similarity(claims: list[dict[str, Any]], threshold: float = 0.20) -> list[tuple[str, list[dict[str, Any]], float, float]]:
+    """Group claims by normalized similarity under a complete-link rule.
+
+    A claim joins a group only when its similarity to EVERY current member is
+    at or above ``threshold``. Single-link behavior (similar to *any* member)
+    is rejected because it permits bridge chaining: A~B and B~C would pull
+    unrelated A and C together through the weak bridge B. Complete-link makes
+    the result deterministic and input-order invariant (claims are sorted
+    first), and the recorded minimum similarity explains why each group is
+    internally coherent.
+    """
+    ordered = _sort_claims(claims)
     groups: list[list[dict[str, Any]]] = []
-    for claim in claims:
+    for claim in ordered:
         best_idx: int | None = None
-        best_score = 0.0
+        best_min = 0.0
         for idx, group in enumerate(groups):
-            score = max(_claim_similarity(claim, member) for member in group)
-            if score > best_score:
+            min_score = min(_claim_similarity(claim, member) for member in group)
+            if min_score >= threshold and min_score > best_min:
                 best_idx = idx
-                best_score = score
-        if best_idx is not None and best_score >= threshold:
+                best_min = min_score
+        if best_idx is not None:
             groups[best_idx].append(claim)
+            claim["grouping_note"] = {
+                "rule": COHESION_RULE,
+                "join_min_similarity": best_min,
+                "joined_existing_group": True,
+            }
         else:
             groups.append([claim])
-    scored: list[tuple[str, list[dict[str, Any]], float]] = []
+            claim["grouping_note"] = {"rule": COHESION_RULE, "join_min_similarity": None, "joined_existing_group": False}
+    scored: list[tuple[str, list[dict[str, Any]], float, float]] = []
     for group in groups:
         key = _make_group_key_from_claims(group)
         pair_scores = [
@@ -304,11 +334,12 @@ def _group_claims_by_similarity(claims: list[dict[str, Any]], threshold: float =
             for j in range(i + 1, len(group))
         ]
         mean_score = round(sum(pair_scores) / len(pair_scores), 4) if pair_scores else 1.0
+        min_score = round(min(pair_scores), 4) if pair_scores else 1.0
         for claim in group:
             claim["claim_group_key"] = key
             claim["claim_group_label"] = _group_label(key)
             claim["normalized_tokens"] = sorted(_token_set(claim))
-        scored.append((key, group, mean_score))
+        scored.append((key, group, mean_score, min_score))
     return scored
 
 
@@ -322,8 +353,8 @@ CLUSTERERS = ("normalized", "token_jaccard")
 
 
 def _token_jaccard(a: set[str], b: set[str]) -> float:
-    if not a and not b:
-        return 1.0
+    # Two claims with no usable tokens carry no evidence of similarity;
+    # returning 1.0 here would force-merge unrelated empty claims.
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
@@ -332,31 +363,49 @@ def _token_jaccard(a: set[str], b: set[str]) -> float:
 def _group_claims_by_token_jaccard(
     claims: list[dict[str, Any]],
     threshold: float = 0.5,
-) -> list[tuple[str, list[dict[str, Any]], float]]:
-    """Group claims by token-set Jaccard overlap only.
+) -> list[tuple[str, list[dict[str, Any]], float, float]]:
+    """Group claims by token-set Jaccard overlap only, complete-link.
 
     This is a stricter, fully lexical alternative to the default mixed
-    similarity. A claim joins the first existing group whose representative
-    token set overlaps at or above `threshold`; otherwise it starts a new
-    group. No network, no embeddings, no model download.
+    similarity. A claim joins an existing group only when its token set
+    overlaps EVERY member's token set at or above ``threshold``; otherwise it
+    starts a new group. The group's representative token set is the union of
+    its members (recomputed on every join), so no single first member pins the
+    group representation. Claims are sorted first, so the grouping is
+    invariant to input order. No network, no embeddings, no model download.
     """
+    ordered = _sort_claims(claims)
     groups: list[list[dict[str, Any]]] = []
     group_tokens: list[set[str]] = []
-    for claim in claims:
+    for claim in ordered:
         tokens = _token_set(claim)
         matched: int | None = None
         best_score = 0.0
-        for idx, rep_tokens in enumerate(group_tokens):
-            score = _token_jaccard(tokens, rep_tokens)
-            if score >= threshold and score > best_score:
+        for idx, group in enumerate(groups):
+            member_scores = [_token_jaccard(tokens, _token_set(member)) for member in group]
+            min_score = min(member_scores) if member_scores else 0.0
+            if min_score >= threshold and min_score > best_score:
                 matched = idx
-                best_score = score
+                best_score = min_score
         if matched is not None:
             groups[matched].append(claim)
+            group_tokens[matched] = set().union(*(_token_set(m) for m in groups[matched]))
+            claim["grouping_note"] = {
+                "rule": COHESION_RULE,
+                "metric": "token_jaccard",
+                "join_min_similarity": best_score,
+                "joined_existing_group": True,
+            }
         else:
             groups.append([claim])
             group_tokens.append(tokens)
-    scored: list[tuple[str, list[dict[str, Any]], float]] = []
+            claim["grouping_note"] = {
+                "rule": COHESION_RULE,
+                "metric": "token_jaccard",
+                "join_min_similarity": None,
+                "joined_existing_group": False,
+            }
+    scored: list[tuple[str, list[dict[str, Any]], float, float]] = []
     for group in groups:
         key = _make_group_key_from_claims(group)
         pair_scores = [
@@ -365,11 +414,12 @@ def _group_claims_by_token_jaccard(
             for j in range(i + 1, len(group))
         ]
         mean_score = round(sum(pair_scores) / len(pair_scores), 4) if pair_scores else 1.0
+        min_score = round(min(pair_scores), 4) if pair_scores else 1.0
         for claim in group:
             claim["claim_group_key"] = key
             claim["claim_group_label"] = _group_label(key)
             claim["normalized_tokens"] = sorted(_token_set(claim))
-        scored.append((key, group, mean_score))
+        scored.append((key, group, mean_score, min_score))
     return scored
 
 
@@ -378,8 +428,13 @@ def _cluster_claims(
     clusterer: str,
     *,
     token_jaccard_threshold: float = 0.5,
-) -> list[tuple[str, list[dict[str, Any]], float]]:
-    """Dispatch to the selected deterministic clusterer."""
+) -> list[tuple[str, list[dict[str, Any]], float, float]]:
+    """Dispatch to the selected deterministic clusterer.
+
+    Returns ``(group_key, claims, mean_score, min_score)`` tuples where
+    ``min_score`` is the complete-link minimum pairwise similarity — the
+    honesty floor for the group's internal coherence.
+    """
     if clusterer == "token_jaccard":
         return _group_claims_by_token_jaccard(claims, threshold=token_jaccard_threshold)
     return _group_claims_by_similarity(claims)
@@ -604,10 +659,12 @@ def _source_diversity(claims: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def _why_grouped(key: str, claims: list[dict[str, Any]]) -> list[str]:
+def _why_grouped(key: str, claims: list[dict[str, Any]], min_score: float | None = None) -> list[str]:
     canonical = [str(c.get("canonical_text") or _canonicalize_claim_text(_text(c.get("text"), ""))) for c in claims]
     shared_tokens = sorted(set.intersection(*(set(t.split()) for t in canonical))) if len(canonical) >= 2 else []
     reasons = [f"normalized similarity grouping key: {key}"]
+    if min_score is not None:
+        reasons.append(f"cohesion rule: {COHESION_RULE} (min pairwise similarity {min_score:.4f})")
     if shared_tokens:
         reasons.append("shared normalized tokens: " + ", ".join(shared_tokens[:8]))
     if len({_text(c.get("source_video_id"), "unknown") for c in claims}) >= 2:
@@ -617,22 +674,39 @@ def _why_grouped(key: str, claims: list[dict[str, Any]]) -> list[str]:
 
 def _make_disagreement_relation(group_id: str, group: dict[str, Any], claims: list[dict[str, Any]]) -> dict[str, Any] | None:
     stances = {_text(c.get("stance"), "reported_claim") for c in claims}
-    if not (
+    stance_mixed = (
         "claim_or_promotion" in stances
         and ("caution_or_counterpoint" in stances or "hypothesis_or_alternative" in stances)
-    ):
+    )
+    opposition_pairs = [
+        [i, j]
+        for i in range(len(claims))
+        for j in range(i + 1, len(claims))
+        if _opposition_score(claims[i], claims[j]) >= 0.45
+    ]
+    if not (stance_mixed or opposition_pairs):
         return None
     relation_type = "support_vs_caution"
     if "hypothesis_or_alternative" in stances and "caution_or_counterpoint" not in stances:
         relation_type = "alternative_explanation"
+    elif not stance_mixed:
+        relation_type = "opposing_stances_pair"
     return {
         "relation_id": f"D{group_id[1:]}",
         "claim_group_id": group_id,
         "relation_type": relation_type,
         "claim_uids": [_text(c.get("claim_uid"), "unknown-claim") for c in claims],
+        "opposition_pairs": [
+            {
+                "left_claim_uid": _text(claims[pair[0]].get("claim_uid"), "unknown-claim"),
+                "right_claim_uid": _text(claims[pair[1]].get("claim_uid"), "unknown-claim"),
+                "opposition_score": _opposition_score(claims[pair[0]], claims[pair[1]]),
+            }
+            for pair in opposition_pairs
+        ],
         "confidence": "medium" if len(claims) >= 2 else "low",
         "human_review_required": True,
-        "why_flagged": "deterministic alpha grouping found promotional/supporting stance alongside caution or alternative stance in the same normalized topic group",
+        "why_flagged": "deterministic alpha grouping found promotional/supporting stance alongside caution or alternative stance in the same normalized topic group, or a pair-level opposition signal within the group",
     }
 
 
@@ -665,20 +739,28 @@ _OPINION_AXES = {
 
 
 def _dominant_axis(group: dict[str, Any]) -> str:
-    """Pick the opinion axis for a claim group from its support roles.
+    """Pick the opinion axis for a claim group from actual role counts.
 
-    Uses the group's own `support_roles` terrain. Falls back to `reported`
-    when no clear role is present. Never invents a stance.
+    Dominance is decided by counting each claim's support role against the
+    opinion-axis role sets; the axis with the most role assignments wins. A
+    single ``supporting`` role can no longer win merely because the enum
+    lists it first. Ties are broken deterministically by the declared
+    ``_OPINION_AXES`` order (supporting, challenging, alternative), and a
+    group with no recognized roles falls back to ``reported``.
     """
-    roles = set(_as_list(group.get("support_roles")))
-    for axis_key, axis in _OPINION_AXES.items():
-        if axis_key == "reported":
-            continue
-        if roles & axis["roles"]:
-            # A group can carry multiple roles; prefer the first non-reported
-            # axis in declared order (supporting, challenging, alternative).
-            return axis_key
-    return "reported"
+    roles = _as_list(group.get("support_roles"))
+    counts: dict[str, int] = defaultdict(int)
+    for role in roles:
+        role_text = _text(role)
+        for axis_key, axis in _OPINION_AXES.items():
+            if axis_key == "reported":
+                continue
+            if role_text in axis["roles"]:
+                counts[axis_key] += 1
+    if not counts:
+        return "reported"
+    ordered_axes = [k for k in _OPINION_AXES if k != "reported"]
+    return max(ordered_axes, key=lambda k: (counts.get(k, 0), -ordered_axes.index(k)))
 
 
 def build_opinion_groups(
@@ -901,7 +983,7 @@ def build_topic_collection(
     outlier_details: list[dict[str, Any]] = []
     contradiction_candidates: list[dict[str, Any]] = []
 
-    for idx, (key, claims, mean_score) in enumerate(sorted(grouped, key=lambda item: item[0]), start=1):
+    for idx, (key, claims, mean_score, min_score) in enumerate(sorted(grouped, key=lambda item: item[0]), start=1):
         group_id = f"G{idx:04d}"
         video_ids = sorted({_text(c.get("source_video_id"), "unknown-video") for c in claims})
         stances = sorted({_text(c.get("stance"), "reported_claim") for c in claims})
@@ -909,6 +991,10 @@ def build_topic_collection(
         has_disagreement = (
             "claim_or_promotion" in stances
             and ("caution_or_counterpoint" in stances or "hypothesis_or_alternative" in stances)
+        ) or any(
+            _opposition_score(claims[i], claims[j]) >= 0.45
+            for i in range(len(claims))
+            for j in range(i + 1, len(claims))
         )
         is_repeated = len(video_ids) >= 2
         is_outlier = len(video_ids) == 1
@@ -944,9 +1030,10 @@ def build_topic_collection(
             "evidence_coordinates": sorted(set(evidence_ids)),
             "source_diversity": _source_diversity(claims),
             "grouping_method": GROUPING_METHOD["name"],
-            "grouping_confidence": "high" if mean_score >= 0.62 and is_repeated else ("medium" if is_repeated or mean_score >= 0.20 else "low"),
+            "grouping_confidence": "high" if min_score >= 0.62 and is_repeated else ("medium" if is_repeated or min_score >= 0.20 else "low"),
             "grouping_score": mean_score,
-            "why_grouped": _why_grouped(key, claims),
+            "cohesion_min_similarity": min_score,
+            "why_grouped": _why_grouped(key, claims, min_score=min_score),
             "human_review_required": bool(has_disagreement or is_outlier),
         }
         if is_outlier:

@@ -153,7 +153,7 @@
       "properties": {
         "relation_id": {"type": "string"},
         "claim_group_id": {"type": "string"},
-        "relation_type": {"enum": ["support_vs_caution", "alternative_explanation", "numeric_mismatch", "framing_conflict", "unknown"]},
+        "relation_type": {"enum": ["support_vs_caution", "alternative_explanation", "opposing_stances_pair", "numeric_mismatch", "framing_conflict", "unknown"]},
         "claim_uids": {"type": "array", "items": {"type": "string"}},
         "confidence": {"enum": ["high", "medium", "low"]},
         "human_review_required": {"type": "boolean"},
