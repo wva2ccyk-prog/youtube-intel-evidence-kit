@@ -127,8 +127,11 @@
         "claim_uids": {"type": "array", "items": {"type": "string"}},
         "member_claim_uids": {"type": "array", "items": {"type": "string"}},
         "representative_claim_uid": {"type": ["string", "null"]},
-        "evidence_ids": {"type": "array", "items": {"type": "string"}},
-        "evidence_coordinates": {"type": "array", "items": {"type": "string"}},
+        "evidence_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "evidence_coordinates": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/evidenceCoordinate"}
+        },
         "source_diversity": {
           "type": "object",
           "required": ["video_count", "speaker_count", "channel_count"],
@@ -173,19 +176,43 @@
       },
       "additionalProperties": true
     },
+    "evidenceCoordinate": {
+      "type": "object",
+      "required": [
+        "evidence_id",
+        "video_id",
+        "timestamp_start",
+        "timestamp_end",
+        "time_ref",
+        "speaker",
+        "speaker_confidence",
+        "modality"
+      ],
+      "properties": {
+        "evidence_id": {"type": "string", "minLength": 1},
+        "video_id": {"type": "string", "minLength": 1},
+        "timestamp_start": {"type": ["number", "null"]},
+        "timestamp_end": {"type": ["number", "null"]},
+        "time_ref": {"type": ["string", "null"]},
+        "speaker": {"type": ["string", "null"]},
+        "speaker_confidence": {"enum": ["high", "medium", "low", "unknown"]},
+        "modality": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+      },
+      "additionalProperties": false
+    },
     "claimIndexRecord": {
       "type": "object",
       "required": ["claim_uid", "source_video_id", "text", "speaker", "time_ref", "evidence_ids", "evidence_coordinate", "confidence", "modality_sources", "verification_status", "need_gates"],
       "properties": {
-        "claim_uid": {"type": "string"},
-        "source_video_id": {"type": "string"},
+        "claim_uid": {"type": "string", "minLength": 1},
+        "source_video_id": {"type": "string", "minLength": 1},
         "text": {"type": "string"},
         "speaker": {"type": ["string", "null"]},
         "time_ref": {"type": ["string", "null"]},
-        "evidence_ids": {"type": "array", "items": {"type": "string"}},
-        "evidence_coordinate": {"type": "object"},
+        "evidence_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "evidence_coordinate": {"$ref": "#/$defs/evidenceCoordinate"},
         "confidence": {"type": "string"},
-        "modality_sources": {"type": "array", "items": {"type": "string"}},
+        "modality_sources": {"type": "array", "items": {"type": "string"}, "minItems": 1},
         "verification_status": {"const": "video_internal_not_fact_checked"},
         "need_gates": {"type": "object"}
       },
@@ -195,13 +222,13 @@
       "type": "object",
       "required": ["evidence_id", "video_id", "timestamp_start", "timestamp_end", "time_ref", "speaker", "modality", "text", "confidence"],
       "properties": {
-        "evidence_id": {"type": "string"},
-        "video_id": {"type": "string"},
+        "evidence_id": {"type": "string", "minLength": 1},
+        "video_id": {"type": "string", "minLength": 1},
         "timestamp_start": {"type": ["number", "null"]},
         "timestamp_end": {"type": ["number", "null"]},
         "time_ref": {"type": ["string", "null"]},
         "speaker": {"type": ["string", "null"]},
-        "modality": {"type": "array", "items": {"type": "string"}},
+        "modality": {"type": "array", "items": {"type": "string"}, "minItems": 1},
         "text": {"type": "string"},
         "confidence": {"type": "string"}
       },

@@ -1013,8 +1013,17 @@ def build_topic_collection(
         label = _group_label(key)
         claim_uids = [_text(c.get("claim_uid"), "unknown-claim") for c in claims]
         evidence_ids: list[str] = []
+        evidence_coords: list[dict[str, Any]] = []
+        seen_coord_ids: set[str] = set()
         for c in claims:
-            evidence_ids.extend(str(e) for e in _as_list(c.get("evidence_ids")))
+            eids = [str(e) for e in _as_list(c.get("evidence_ids"))]
+            evidence_ids.extend(eids)
+            coord = c.get("evidence_coordinate")
+            if isinstance(coord, dict):
+                eid = coord.get("evidence_id")
+                if eid and eid not in seen_coord_ids:
+                    seen_coord_ids.add(eid)
+                    evidence_coords.append(coord)
         group = {
             "group_id": group_id,
             "claim_group_key": key,
@@ -1033,7 +1042,7 @@ def build_topic_collection(
             "member_claim_uids": claim_uids,
             "representative_claim_uid": claim_uids[0] if claim_uids else None,
             "evidence_ids": sorted(set(evidence_ids)),
-            "evidence_coordinates": sorted(set(evidence_ids)),
+            "evidence_coordinates": evidence_coords,
             "source_diversity": _source_diversity(claims),
             "grouping_method": GROUPING_METHOD["name"],
             "grouping_confidence": "high" if min_score >= 0.62 and is_repeated else ("medium" if is_repeated or min_score >= 0.20 else "low"),
