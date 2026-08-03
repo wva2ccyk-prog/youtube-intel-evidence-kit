@@ -70,7 +70,61 @@ jobs:
               payload = json.loads(r.stdout)
               assert payload["ok"] is False and payload["error"] == "InvalidInputError"
               assert not (td/"o3").exists()
-              print("malformed CLI smoke OK (package/worth/topic-demo)")
+              # default cue-mode fractional timestamp propagation (package CLI,
+              # no --claim-assembly sentence)
+              seg = td / "cue_seg.json"
+              seg.write_text(json.dumps({"video": {"video_id": "rv", "title": "RV", "language": "en"},
+                "segments": [{"text": "first cue", "start": 12.37, "end": 14.81, "time_ref": "00:12", "speaker": "A"},
+                              {"text": "second cue.", "start": 15.05, "end": 17.10, "time_ref": "00:15", "speaker": "A"}]}), encoding="utf-8")
+              r = run_cli("package", "--segments", str(seg), "--out", str(td/"o4"))
+              assert r.returncode == 0, r.stderr
+              pkg = json.loads((td/"o4"/"residual_package.json").read_text(encoding="utf-8"))
+              c = pkg["claim_candidates"][0]
+              assert abs(c["span_start"] - 12.37) < 1e-9, c
+              assert abs(c["span_end"] - 14.81) < 1e-9, c
+              assert abs(c["source_cue_coordinates"][0]["start"] - 12.37) < 1e-9
+              assert abs(c["source_cue_coordinates"][0]["end"] - 14.81) < 1e-9
+              # worth: whitespace-only required string fails closed
+              ws = td / "ws_pkg.json"
+              ws.write_text(json.dumps({"schema_version": "youtube_residual_v0.1",
+                "video": {"video_id": "   ", "title": "T", "language": "en"},
+                "claim_candidates": [{"claim_id": "C0001", "text": "A real claim text here."}]}), encoding="utf-8")
+              r = run_cli("worth", "--package", str(ws), "--out", str(td/"o5"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              # topic-demo: invalid expected_groupings threshold (string)
+              td3 = td / "topic2"; td3.mkdir()
+              (td3/"video_a.json").write_text(json.dumps({"video": {"video_id": "v", "title": "T", "language": "en"},
+                "segments": [{"text": "The kit cuts water use by twenty percent.", "speaker": "A", "time_ref": "00:00"}]}), encoding="utf-8")
+              (td3/"expected_groupings.json").write_text(json.dumps({"must_link": [], "threshold": "not-a-number"}), encoding="utf-8")
+              r = run_cli("topic-demo", "--topic-dir", str(td3), "--out", str(td/"o6"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              assert not (td/"o6").exists()
+              # handoff: duplicate/incomplete trace row fails closed
+              hp = td / "hpkg.json"
+              hp.write_text(json.dumps({"schema_version": "youtube_residual_v0.1",
+                "video": {"video_id": "rv", "title": "RV", "language": "en"},
+                "claim_candidates": [{"claim_id": "C0001", "text": "A real claim text here.", "content_type": "claim_or_promotion", "evidence": "video_internal", "confidence": "medium", "time_ref": None}]}), encoding="utf-8")
+              hw = td / "hworth.json"
+              hw.write_text(json.dumps({"schema_version": "youtube_analysis_worth_v0.1",
+                "video": {"video_id": "rv", "title": "RV", "language": "en"},
+                "decision": {"analysis_worth": "maybe", "recommended_route": "full_verification"},
+                "source_trace": [{"claim_id": "C0001", "time_ref": None, "evidence": "video_internal", "confidence": "medium", "claim_type": "claim_or_promotion", "excerpt": "x"},
+                                  {"claim_id": "C0001", "time_ref": None, "evidence": "video_internal", "confidence": "medium", "claim_type": "claim_or_promotion", "excerpt": "x"}]}), encoding="utf-8")
+              r = run_cli("handoff", "--package", str(hp), "--analysis-worth", str(hw), "--out", str(td/"o7"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              assert not (td/"o7"/"handoff_manifest.json").exists()
+              # MCP dependency-free validator: wrong schema version rejected,
+              # plus a secondary dangling evidence id rejected via the loader
+              import youtube_intel.topic_collection as tc
+              issues = tc.validate_topic_collection_document({"schema_version": "invalid"})
+              assert issues, "expected schema-version rejection"
+              print("malformed CLI smoke OK (package/worth/topic-demo/handoff/MCP)")
           EOF
       - name: Compile all sources
         run: python -m compileall -q src tests scripts
