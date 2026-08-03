@@ -32,8 +32,30 @@ jobs:
         run: python scripts/public_release_leak_scan.py
       - name: Encoding check
         run: python scripts/check_encoding.py
-      - name: Run tests
-        run: python -m pytest -q -p no:cacheprovider
+      - name: Run tests (warning-free)
+        run: python -m pytest -W error -q -p no:cacheprovider
+      - name: Source-mode assertions
+        run: |
+          python - <<'EOF'
+          from youtube_intel._fixtures import is_source_checkout
+          assert is_source_checkout() is True, "CI source job must run from a source checkout"
+          EOF
+          python -m youtube_intel doctor | python -c "import json,sys; d=json.load(sys.stdin); assert d['core']['runtime_mode']=='source_checkout'; assert d['ok'] is True; print('doctor source_checkout OK')"
+      - name: Malformed CLI smoke (structured failures)
+        run: |
+          python - <<'EOF'
+          import json, subprocess, sys, tempfile, os
+          from pathlib import Path
+          with tempfile.TemporaryDirectory() as td:
+              bad = Path(td) / "bad.json"
+              bad.write_text("{ not valid json", encoding="utf-8")
+              r = subprocess.run([sys.executable, "-m", "youtube_intel", "package", "--segments", str(bad), "--out", str(Path(td)/"out")], capture_output=True, text=True, env={**os.environ, "PYTHONPATH":"src"})
+              assert r.returncode == 2, r.stdout
+              assert "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              print("malformed CLI smoke OK")
+          EOF
       - name: Compile all sources
         run: python -m compileall -q src tests scripts
       - name: MCP handoff smoke
@@ -128,4 +150,21 @@ jobs:
           errors = sorted(Draft202012Validator(schema).iter_errors(collection), key=lambda e: list(e.path))
           assert not errors, "; ".join(f"{list(e.path)}: {e.message}" for e in errors[:5])
           print("generated TopicCollection validates against schema")
+          EOF
+      - name: Installed-wheel clean safety (must refuse everything)
+        run: |
+          . .wheel-venv/bin/activate
+          mkdir -p /tmp/wheel-clean-target
+          set +e
+          youtube-intel clean /tmp/wheel-clean-target > /tmp/wheel-clean-out.json 2>/tmp/wheel-clean-err.txt
+          rc=$?
+          set -e
+          test $rc -eq 2
+          test -d /tmp/wheel-clean-target
+          python - <<'EOF'
+          import json
+          payload = json.loads(open("/tmp/wheel-clean-out.json"))
+          assert payload["ok"] is False
+          assert "source checkout" in payload["message"], payload
+          print("installed-wheel clean refusal OK")
           EOF
