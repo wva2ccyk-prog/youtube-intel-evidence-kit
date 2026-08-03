@@ -1,12 +1,13 @@
 """P1-F + Section 7: `youtube-intel clean` must never delete arbitrary or
 dangerous paths, must be safe in installed-wheel environments, and must never
-delete protected source directories even with --force.
+delete protected source directories or non-generated repository content.
 
 Every target is resolved before deletion. Filesystem root, user home,
 repository root, repository parent, outside paths, and symlink escapes are
-refused; non-generated repository paths require --force; --dry-run deletes
-nothing; missing paths are reported. When no source checkout is detected
-(installed wheel), clean fails closed and deletes nothing.
+refused; only recognized generated-output locations are deletable and --force
+never widens the set; --dry-run deletes nothing; missing paths are reported.
+When no source checkout is detected (installed wheel), clean fails closed and
+deletes nothing.
 """
 
 from __future__ import annotations
@@ -103,12 +104,15 @@ def test_mixed_allowed_and_refused_delete_nothing(tmp_path: Path, monkeypatch, c
     assert kept.exists(), "a refused plan must delete nothing"
 
 
-def test_non_generated_path_requires_force(tmp_path: Path) -> None:
+def test_non_generated_path_never_deletable_even_with_force(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _, _, refusals = _clean_plan([str(repo / "notes.txt")], repo_root=repo, force=False)
     assert any("non-generated" in r for r in refusals)
-    allowed, _, _ = _clean_plan([str(repo / "notes.txt")], repo_root=repo, force=True)
-    assert allowed == [(repo / "notes.txt").resolve()]
+    # Regression: --force must never authorize deleting arbitrary repository
+    # content, so it is still refused with force=True.
+    allowed, _, refusals = _clean_plan([str(repo / "notes.txt")], repo_root=repo, force=True)
+    assert allowed == []
+    assert any("non-generated" in r for r in refusals)
 
 
 def test_force_cannot_delete_protected_source_dirs(tmp_path: Path) -> None:
@@ -178,3 +182,15 @@ def test_clean_fails_closed_in_installed_wheel(tmp_path: Path, monkeypatch, caps
     assert payload["ok"] is False
     assert "source checkout" in payload["message"]
     assert target.exists(), "installed-wheel clean must delete nothing"
+
+
+def test_clean_refuses_non_generated_repo_file_via_cli(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    monkeypatch.setattr("youtube_intel.cli.find_source_root", lambda: repo)
+    notes = repo / "notes.txt"
+    rc = main(["clean", str(notes)])
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert any("non-generated" in r for r in payload["refusals"])
+    assert notes.is_file(), "non-generated repository content must never be deleted"

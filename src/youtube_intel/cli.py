@@ -366,17 +366,19 @@ def _clean_plan(
     targets: list[str],
     *,
     repo_root: Path,
-    force: bool,
+    force: bool = False,
 ) -> tuple[list[Path], list[Path], list[str]]:
     """Resolve every target and return ``(allowed, missing, refusals)``.
 
     Every path is resolved (symlinks followed) BEFORE any deletion decision.
     Filesystem root, user home, the repository root itself, and any path
-    outside the repository are always refused. Repository-internal paths that
-    are not recognized generated-output locations require ``force=True``, but
-    protected source directories (``src``, ``.git``, ``tests``, ``schemas``,
-    ``.github``, ``docs``, ``scripts``) are never deletable even with ``--force``.
-    Any refusal means the caller must fail closed and delete nothing.
+    outside the repository are always refused. Only recognized generated-output
+    locations are deletable; ``force`` is retained only for API compatibility
+    and NEVER widens the deletion set, so arbitrary repository content cannot be
+    removed even with ``--force``. Protected source directories (``src``,
+    ``.git``, ``tests``, ``schemas``, ``.github``, ``docs``, ``scripts``) are
+    always refused. Any refusal means the caller must fail closed and delete
+    nothing.
     """
     root = repo_root.resolve()
     home = Path.home().resolve()
@@ -413,10 +415,12 @@ def _clean_plan(
             first in GENERATED_DIR_NAMES
             or (len(rel.parts) == 1 and target.suffix.lower() in GENERATED_FILE_SUFFIXES)
         )
-        if not is_generated and not force:
+        if not is_generated:
+            # Non-generated repository content is never deletable, even with
+            # --force, so clean cannot remove arbitrary repository content.
             refusals.append(
                 f"refusing to delete non-generated path: {raw!r} -> {target} "
-                f"(use --force to allow non-default paths)"
+                f"(clean only removes generated-output locations)"
             )
             continue
         allowed.append(target)
@@ -434,7 +438,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
             "error": "InvalidInputError",
             "message": "clean is available only from a detected source checkout",
         })
-    allowed, missing, refusals = _clean_plan(args.path, repo_root=root, force=args.force)
+    allowed, missing, refusals = _clean_plan(args.path, repo_root=root)
     if refusals:
         # Fail closed: a dangerous or unauthorized target means NOTHING is
         # deleted, and the refusal is returned as structured JSON.
@@ -538,10 +542,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check-plugins", help="Print optional plugin status.")
     p.set_defaults(func=cmd_check_plugins)
 
-    p = sub.add_parser("clean", help="Remove generated output paths (repository-bound and fail-closed by default).")
+    p = sub.add_parser("clean", help="Remove generated output paths (source-checkout only and fail-closed by default).")
     p.add_argument("path", nargs="+", default=["outputs/demo"])
     p.add_argument("--dry-run", action="store_true", help="Report what would be removed without deleting anything.")
-    p.add_argument("--force", action="store_true", help="Allow repository-internal paths that are not recognized generated-output locations.")
     p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("mcp-stdio", help="Run the read-only synthetic overlay MCP-style JSON-RPC stdio smoke server.")

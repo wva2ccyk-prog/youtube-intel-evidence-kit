@@ -84,7 +84,7 @@ because the scan rejects bytecode/cache artifacts.
 | `youtube-intel single-video-handoff --package ... --analysis-worth ... --out outputs/handoff` | Build AI CLI handoff files from a structurally valid, coherent package+worth pair (complete bundle) |
 | `youtube-intel mcp-stdio` | Run the legacy read-only synthetic overlay MCP-style JSON-RPC stdio smoke server |
 | `youtube-intel topic-mcp-stdio --topic-collection outputs/topic_demo/topic_collection.json` | Run the read-only TopicCollection MCP-ready JSON-RPC stdio handoff facade |
-| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts (source-checkout only; repository-bound and fail-closed; `--dry-run` to preview, `--force` for non-generated repo paths, never protected source dirs) |
+| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts (source-checkout only; repository-bound and fail-closed; only generated-output locations are deletable, never arbitrary, protected, or non-generated content; `--dry-run` to preview) |
 
 ## Operator Loop
 
