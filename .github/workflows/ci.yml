@@ -46,15 +46,31 @@ jobs:
           python - <<'EOF'
           import json, subprocess, sys, tempfile, os
           from pathlib import Path
+          def run_cli(*args):
+              return subprocess.run([sys.executable, "-m", "youtube_intel", *args], capture_output=True, text=True, env={**os.environ, "PYTHONPATH":"src"})
           with tempfile.TemporaryDirectory() as td:
-              bad = Path(td) / "bad.json"
-              bad.write_text("{ not valid json", encoding="utf-8")
-              r = subprocess.run([sys.executable, "-m", "youtube_intel", "package", "--segments", str(bad), "--out", str(Path(td)/"out")], capture_output=True, text=True, env={**os.environ, "PYTHONPATH":"src"})
-              assert r.returncode == 2, r.stdout
-              assert "Traceback" not in r.stderr
+              td = Path(td)
+              # package: invalid JSON
+              bad = td / "bad.json"; bad.write_text("{ not valid json", encoding="utf-8")
+              r = run_cli("package", "--segments", str(bad), "--out", str(td/"o1"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
               payload = json.loads(r.stdout)
               assert payload["ok"] is False and payload["error"] == "InvalidInputError"
-              print("malformed CLI smoke OK")
+              # worth: structurally invalid package
+              pkg = td / "pkg.json"; pkg.write_text(json.dumps({"claim_candidates": [{}]}), encoding="utf-8")
+              r = run_cli("worth", "--package", str(pkg), "--out", str(td/"o2"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              # topic-demo: null segment row, no partial artifacts
+              td2 = td / "topic"; td2.mkdir()
+              (td2/"video_a.json").write_text(json.dumps({"video": {"video_id": "v", "title": "T", "language": "en"}, "segments": [None]}), encoding="utf-8")
+              r = run_cli("topic-demo", "--topic-dir", str(td2), "--out", str(td/"o3"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              assert not (td/"o3").exists()
+              print("malformed CLI smoke OK (package/worth/topic-demo)")
           EOF
       - name: Compile all sources
         run: python -m compileall -q src tests scripts
