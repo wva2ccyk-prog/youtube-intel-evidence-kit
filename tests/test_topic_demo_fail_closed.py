@@ -336,3 +336,80 @@ def test_valid_expected_groupings_succeed(tmp_path) -> None:
     assert (out / "topic_collection.json").exists()
     assert (out / "topic_handoff_manifest.json").exists()
     assert (out / "grouping_evaluation.json").exists()
+
+
+# --- Fourth pass: expected-groupings fail-closed additions -------------------
+
+
+def test_expected_groupings_missing_must_link(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"threshold": 0.5})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "must_link is required" in payload["message"]
+
+
+def test_expected_groupings_null_must_link(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": None})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "must_link" in payload["message"]
+
+
+def test_expected_groupings_duplicate_pair(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [["a", "b"], ["a", "b"]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "duplicate pair" in payload["message"]
+
+
+def test_expected_groupings_reversed_duplicate_pair(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [["a", "b"], ["b", "a"]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "duplicate pair" in payload["message"]
+
+
+def test_expected_groupings_same_pair_in_must_and_cannot(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(
+        tmp_path,
+        {"must_link": [["a", "b"]], "cannot_link": [["a", "b"]]},
+    )
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "contradictory pair" in payload["message"]
+
+
+def test_expected_groupings_same_item_on_both_sides(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [["a", "a"]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "same item on both sides" in payload["message"]
+
+
+def test_expected_groupings_unknown_field_rejected(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "unknown_field": True})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "unknown field" in payload["message"]
+
+
+def test_expected_groupings_valid_populated_document(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(
+        tmp_path,
+        {
+            "must_link": [["a-claim-text", "b-claim-text"]],
+            "cannot_link": [["c-claim-text", "d-claim-text"]],
+            "threshold": 0.5,
+        },
+    )
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+    assert (out / "topic_handoff_manifest.json").exists()
