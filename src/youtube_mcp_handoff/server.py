@@ -36,28 +36,28 @@ def _wrap_with_guard(data: dict, overlay: dict) -> dict:
 
 def mcp_overlay_summary(overlay_path: str | Path | None = None) -> dict:
     path = _resolve_overlay_path(overlay_path)
-    overlay = overlay_service.load_operator_overlay(path)
+    overlay = overlay_service.load_validated_operator_overlay(path)
     data = overlay_service.overlay_summary(overlay)
     return _wrap_with_guard(data, overlay)
 
 
 def mcp_overlay_groups(overlay_path: str | Path | None = None) -> dict:
     path = _resolve_overlay_path(overlay_path)
-    overlay = overlay_service.load_operator_overlay(path)
+    overlay = overlay_service.load_validated_operator_overlay(path)
     data = overlay_service.overlay_groups(overlay)
     return _wrap_with_guard(data, overlay)
 
 
 def mcp_overlay_group_detail(overlay_group_id: str, overlay_path: str | Path | None = None) -> dict:
     path = _resolve_overlay_path(overlay_path)
-    overlay = overlay_service.load_operator_overlay(path)
+    overlay = overlay_service.load_validated_operator_overlay(path)
     data = overlay_service.overlay_group_detail(overlay, overlay_group_id)
     return _wrap_with_guard(data, overlay)
 
 
 def mcp_overlay_limitations(overlay_path: str | Path | None = None) -> dict:
     path = _resolve_overlay_path(overlay_path)
-    overlay = overlay_service.load_operator_overlay(path)
+    overlay = overlay_service.load_validated_operator_overlay(path)
     data = overlay_service.overlay_limitations(overlay)
     return _wrap_with_guard(data, overlay)
 
