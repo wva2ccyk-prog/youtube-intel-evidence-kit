@@ -1,0 +1,59 @@
+name: final-corrective-fix
+
+on:
+  push:
+    branches:
+      - fix/evidence-integrity-and-runtime-correctness
+    paths:
+      - scripts/_final_corrective_patch.py
+      - .github/workflows/_final-corrective-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/evidence-integrity-and-runtime-correctness
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply corrective patch
+        run: python scripts/_final_corrective_patch.py
+      - name: Check patch formatting
+        run: git diff --check
+      - name: Install package and development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[dev]
+      - name: Run focused corrective tests
+        run: |
+          python -m pytest -W error -q -p no:cacheprovider \
+            tests/test_final_contract_hardening.py \
+            tests/test_evidence_coordinates.py \
+            tests/test_strict_timestamps.py \
+            tests/test_handoff_bundle.py \
+            tests/test_mcp_runtime_validation.py
+      - name: Run complete warning-free suite
+        run: python -m pytest -W error -q -p no:cacheprovider
+      - name: Run repository verification
+        run: |
+          python scripts/check_encoding.py
+          python scripts/clean_generated_artifacts.py
+          python scripts/public_release_leak_scan.py
+          python -m compileall -q src tests scripts
+          python -m youtube_mcp_handoff.smoke
+      - name: Commit verified changes
+        run: |
+          git rm scripts/_final_corrective_patch.py .github/workflows/_final-corrective-fix.yml
+          git add src schemas tests
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: complete fail-closed contract parity"
+          git push origin HEAD:fix/evidence-integrity-and-runtime-correctness
