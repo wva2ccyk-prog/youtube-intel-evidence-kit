@@ -119,11 +119,100 @@ jobs:
               payload = json.loads(r.stdout)
               assert payload["ok"] is False and payload["error"] == "InvalidInputError"
               assert not (td/"o7"/"handoff_manifest.json").exists()
+              # 1) handoff fabricated timestamp: trace invents a time_ref absent
+              # from the source claim (source time_ref is None).
+              hp2 = td / "hpkg2.json"
+              hp2.write_text(json.dumps({"schema_version": "youtube_residual_v0.1",
+                "video": {"video_id": "rv", "title": "RV", "language": "en"},
+                "claim_candidates": [{"claim_id": "C0001", "text": "A real claim text here.", "content_type": "claim_or_promotion", "evidence": "video_internal", "confidence": "medium", "time_ref": None}]}), encoding="utf-8")
+              hw2 = td / "hworth2.json"
+              hw2.write_text(json.dumps({"schema_version": "youtube_analysis_worth_v0.1",
+                "video": {"video_id": "rv", "title": "RV", "language": "en"},
+                "decision": {"analysis_worth": "maybe", "recommended_route": "full_verification"},
+                "source_trace": [{"claim_id": "C0001", "time_ref": "01:30", "evidence": "video_internal", "confidence": "medium", "claim_type": "claim_or_promotion", "excerpt": "x"}]}), encoding="utf-8")
+              r = run_cli("handoff", "--package", str(hp2), "--analysis-worth", str(hw2), "--out", str(td/"o8"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              assert not (td/"o8").exists()
+              # 2) package CLI non-string identity (integer video_id) is rejected.
+              idpkg = td / "idpkg.json"
+              idpkg.write_text(json.dumps({"video": {"video_id": 123, "title": "T", "language": "en"},
+                "segments": [{"text": "A real claim text here.", "speaker": "A", "time_ref": "00:00"}]}), encoding="utf-8")
+              r = run_cli("package", "--segments", str(idpkg), "--out", str(td/"o9"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              assert not (td/"o9").exists()
+              # 3) boolean structured timestamp is rejected by the package CLI.
+              nanpkg = td / "nanpkg.json"
+              nanpkg.write_text(json.dumps({"video": {"video_id": "rv", "title": "RV", "language": "en"},
+                "segments": [{"text": "A real claim text here.", "start": True, "speaker": "A"}]}), encoding="utf-8")
+              r = run_cli("package", "--segments", str(nanpkg), "--out", str(td/"o10"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              assert not (td/"o10").exists()
+              # expected_groupings missing must_link rejected at the topic-demo boundary.
+              td4 = td / "topic3"; td4.mkdir()
+              (td4/"video_a.json").write_text(json.dumps({"video": {"video_id": "v", "title": "T", "language": "en"},
+                "segments": [{"text": "The kit cuts water use by twenty percent.", "speaker": "A", "time_ref": "00:00"}]}), encoding="utf-8")
+              (td4/"expected_groupings.json").write_text(json.dumps({"threshold": 0.5}), encoding="utf-8")
+              r = run_cli("topic-demo", "--topic-dir", str(td4), "--out", str(td/"o11"))
+              assert r.returncode == 2 and "Traceback" not in r.stderr
+              payload = json.loads(r.stdout)
+              assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+              assert not (td/"o11").exists()
               # MCP dependency-free validator: wrong schema version rejected,
               # plus a secondary dangling evidence id rejected via the loader
               import youtube_intel.topic_collection as tc
               issues = tc.validate_topic_collection_document({"schema_version": "invalid"})
               assert issues, "expected schema-version rejection"
+              # 4) MCP loader rejects matching-invalid-coordinate document.
+              from youtube_intel.topic_mcp_facade import load_topic_collection
+              # Build a small valid collection through topic-demo, then mutate it.
+              tdok = td / "topicok"; tdok.mkdir()
+              (tdok/"video_a.json").write_text(json.dumps({"video": {"video_id": "v", "title": "T", "language": "en"},
+                "segments": [{"text": "The kit cuts water use by twenty percent.", "speaker": "A", "time_ref": "00:00"}]}), encoding="utf-8")
+              rok = run_cli("topic-demo", "--topic-dir", str(tdok), "--out", str(td/"ook"))
+              assert rok.returncode == 0, rok.stderr
+              coll = json.loads((td/"ook"/"topic_collection.json").read_text(encoding="utf-8"))
+              # matching-invalid coordinate: same bad timestamp in evidence and claim coord
+              eid = next(iter(coll["evidence_index"]))
+              coll["evidence_index"][eid]["timestamp_start"] = False
+              uid = next(iter(coll["claim_index"]))
+              coll["claim_index"][uid]["evidence_coordinate"]["timestamp_start"] = False
+              badc = td / "badcoll.json"; badc.write_text(json.dumps(coll), encoding="utf-8")
+              try:
+                  load_topic_collection(badc)
+                  raise AssertionError("MCP loader accepted matching-invalid coordinate")
+              except Exception as exc:
+                  assert "InvalidInputError" in type(exc).__name__ or isinstance(exc, ValueError), exc
+              # 5) MCP loader rejects a claim in two groups (full fixture gives 2+ groups).
+              from youtube_intel._fixtures import fixture_path
+              from youtube_intel.topic_collection import build_topic_demo_from_segments
+              m2 = build_topic_demo_from_segments(fixture_path("topic_demo"), topic_id="t", topic_title="T", output_dir=td/"mkmulti")
+              coll2 = json.loads(Path(m2["paths"]["topic_collection_json"]).read_text(encoding="utf-8"))
+              assert len(coll2["claim_groups"]) >= 2, "fixture expected multiple groups"
+              g0 = coll2["claim_groups"][0]["claim_uids"][0]
+              coll2["claim_groups"][1]["claim_uids"].append(g0)
+              coll2["claim_groups"][1]["member_claim_uids"].append(g0)
+              coll2["claim_groups"][1]["claim_count"] = len(coll2["claim_groups"][1]["member_claim_uids"])
+              badc2 = td / "badcoll2.json"; badc2.write_text(json.dumps(coll2), encoding="utf-8")
+              try:
+                  load_topic_collection(badc2)
+                  raise AssertionError("MCP loader accepted multi-group claim")
+              except Exception as exc:
+                  assert "InvalidInputError" in type(exc).__name__ or isinstance(exc, ValueError), exc
+              # 6) MCP loader rejects a missing required source-video field.
+              coll3 = json.loads((td/"ook"/"topic_collection.json").read_text(encoding="utf-8"))
+              coll3["source_videos"][0].pop("title")
+              badc3 = td / "badcoll3.json"; badc3.write_text(json.dumps(coll3), encoding="utf-8")
+              try:
+                  load_topic_collection(badc3)
+                  raise AssertionError("MCP loader accepted missing source-video title")
+              except Exception as exc:
+                  assert "InvalidInputError" in type(exc).__name__ or isinstance(exc, ValueError), exc
               print("malformed CLI smoke OK (package/worth/topic-demo/handoff/MCP)")
           EOF
       - name: Compile all sources
