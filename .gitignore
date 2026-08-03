@@ -53,6 +53,7 @@ private_denylist.local
 
 # Keep synthetic fixtures explicitly tracked even though the extension is ignored above
 !examples/synthetic_transcript.vtt
+!src/youtube_intel/_fixtures/synthetic_transcript.vtt
 !examples/**/*.json
 !docs/**/*.md
 !tests/**/*.py

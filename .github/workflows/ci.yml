@@ -115,6 +115,9 @@ jobs:
       - name: Validate generated schemas from the installed wheel
         run: |
           . .wheel-venv/bin/activate
+          # jsonschema is a dev-only checker (not a runtime dep of the wheel);
+          # install it in the clean venv for this validation step only.
+          python -m pip install jsonschema
           python - <<'EOF'
           import json
           from pathlib import Path
