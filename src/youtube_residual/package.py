@@ -94,26 +94,28 @@ def normalize_segment_provenance(
     into plausible coordinates (e.g. a bad ``start`` cannot silently fall back
     to ``time_ref``).
     """
-    from youtube_intel.sentence_assembly import parse_timestamp
+    from youtube_intel.sentence_assembly import parse_structured_timestamp
 
     start_raw = segment.get("start")
     if start_raw not in (None, ""):
-        start = parse_timestamp(start_raw)
-        if start is None:
-            raise InvalidInputError(
-                f"segment {cue_index} has an invalid structured start timestamp: {start_raw!r}"
-            )
+        start = parse_structured_timestamp(
+            start_raw, field=f"segment {cue_index} start"
+        )
     else:
-        start = parse_timestamp(segment.get("time_ref"))
+        start = parse_structured_timestamp(
+            segment.get("time_ref"), field=f"segment {cue_index} time_ref"
+        )
     end_raw = segment.get("end")
     if end_raw not in (None, ""):
-        end = parse_timestamp(end_raw)
-        if end is None:
-            raise InvalidInputError(
-                f"segment {cue_index} has an invalid structured end timestamp: {end_raw!r}"
-            )
+        end = parse_structured_timestamp(
+            end_raw, field=f"segment {cue_index} end"
+        )
     else:
         end = None
+    if start is not None and end is not None and end < start:
+        raise InvalidInputError(
+            f"segment {cue_index} end timestamp precedes its start timestamp"
+        )
     return {
         "cue_indices": [cue_index],
         "source_time_refs": [segment.get("time_ref")],
@@ -152,29 +154,27 @@ def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
     cue end. No end timestamp is invented: when a cue has no ``end`` it is
     ``None`` in ``source_cue_coordinates``.
     """
-    from youtube_intel.sentence_assembly import Cue, assemble_sentences, parse_timestamp
+    from youtube_intel.sentence_assembly import Cue, assemble_sentences, parse_structured_timestamp
 
     cues: list[Cue] = []
     for i, seg in enumerate(segments):
         if not isinstance(seg, dict):
             raise ValueError(f"segment {i} is not an object")
-        # Structured start/end win over the legacy time_ref fallback. A
-        # present-but-unparseable structured timestamp is rejected (never
-        # silently coerced), matching the default cue path policy.
+        # Structured start/end win over the legacy time_ref fallback. Uses the
+        # same strict parser as the default cue path (booleans, non-finite,
+        # negative, and reversed intervals are rejected).
         start_raw = seg.get("start")
         if start_raw not in (None, ""):
-            start = parse_timestamp(start_raw)
-            if start is None:
-                raise InvalidInputError(f"segment {i} has an invalid structured start timestamp: {start_raw!r}")
+            start = parse_structured_timestamp(start_raw, field=f"segment {i} start")
         else:
-            start = parse_timestamp(seg.get("time_ref"))
+            start = parse_structured_timestamp(seg.get("time_ref"), field=f"segment {i} time_ref")
         end_raw = seg.get("end")
         if end_raw not in (None, ""):
-            end = parse_timestamp(end_raw)
-            if end is None:
-                raise InvalidInputError(f"segment {i} has an invalid structured end timestamp: {end_raw!r}")
+            end = parse_structured_timestamp(end_raw, field=f"segment {i} end")
         else:
             end = None
+        if start is not None and end is not None and end < start:
+            raise InvalidInputError(f"segment {i} end timestamp precedes its start timestamp")
         cues.append(
             Cue(
                 index=i,

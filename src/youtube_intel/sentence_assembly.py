@@ -28,8 +28,11 @@ Heuristics (see docs/CLAIM_ASSEMBLY.md)
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
+
+from .errors import InvalidInputError
 
 __all__ = [
     "Cue",
@@ -38,6 +41,7 @@ __all__ = [
     "assemble_from_dicts",
     "is_sentence_final",
     "parse_timestamp",
+    "parse_structured_timestamp",
     "format_timestamp",
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_SPAN_SECONDS",
@@ -308,6 +312,47 @@ def parse_timestamp(value) -> float | None:
         return float(parts[0])
     except (ValueError, IndexError):
         return None
+
+
+def parse_structured_timestamp(
+    value: Any,
+    *,
+    field: str,
+    allow_none: bool = True,
+) -> float | None:
+    """Strictly parse a structured timestamp into finite non-negative seconds.
+
+    Used by both cue and sentence assembly so the two modes share one strict
+    rule. Rejects booleans, NaN, +/-Infinity, negative values, and unparseable
+    strings. ``None``/blank input returns ``None`` only when ``allow_none`` is
+    true. Fractional precision is preserved; nothing is rounded.
+    """
+    if value is None:
+        if allow_none:
+            return None
+        raise InvalidInputError(f"{field} is required")
+    if isinstance(value, bool):
+        raise InvalidInputError(f"{field} must be a number or timestamp string, got a boolean")
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            if allow_none:
+                return None
+            raise InvalidInputError(f"{field} is required")
+        if text.startswith("-"):
+            raise InvalidInputError(f"{field} must be non-negative")
+        parsed = parse_timestamp(text)
+        if parsed is None:
+            raise InvalidInputError(f"{field} is not a valid timestamp: {value!r}")
+    else:
+        raise InvalidInputError(f"{field} must be a number or timestamp string, got {type(value).__name__}")
+    if not math.isfinite(parsed):
+        raise InvalidInputError(f"{field} must be finite (NaN/Infinity rejected)")
+    if parsed < 0:
+        raise InvalidInputError(f"{field} must be non-negative")
+    return parsed
 
 
 def format_timestamp(seconds: float | None, *, hms: bool = False) -> str | None:

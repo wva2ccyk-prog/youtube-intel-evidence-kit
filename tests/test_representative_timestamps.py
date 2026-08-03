@@ -208,9 +208,9 @@ def test_invalid_structured_timestamp_rejected_in_cue_mode(tmp_path: Path) -> No
     from youtube_residual.package import normalize_segment_provenance
     from youtube_intel.errors import InvalidInputError
 
-    with pytest.raises(InvalidInputError, match="invalid structured start timestamp"):
+    with pytest.raises(InvalidInputError, match="is not a valid timestamp"):
         normalize_segment_provenance({"text": "x", "start": "banana", "time_ref": "00:12"}, cue_index=0)
-    with pytest.raises(InvalidInputError, match="invalid structured end timestamp"):
+    with pytest.raises(InvalidInputError, match="is not a valid timestamp"):
         normalize_segment_provenance({"text": "x", "start": 1.0, "end": "zzz"}, cue_index=0)
 
 
@@ -219,5 +219,5 @@ def test_invalid_structured_timestamp_rejected_in_sentence_mode(tmp_path: Path) 
     from youtube_intel.errors import InvalidInputError
     from youtube_residual.package import assemble_segments_to_sentences
 
-    with pytest.raises(InvalidInputError, match="invalid structured start timestamp"):
+    with pytest.raises(InvalidInputError, match="is not a valid timestamp"):
         assemble_segments_to_sentences([{"text": "x", "start": "banana", "time_ref": "00:12"}])
