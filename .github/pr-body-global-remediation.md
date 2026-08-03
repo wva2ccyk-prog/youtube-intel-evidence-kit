@@ -59,7 +59,8 @@ Code-level remediation of the global audit findings, plus **four independent-rev
 - **PR #2 remains open and unmerged.**
 - **PR #1 was not modified or merged.**
 - No approval was self-issued; the branch is ready for another independent review.
-- The final head SHA and per-job conclusions are recorded in the live PR description after the CI run completes.
+- Final head SHA: `e1a531849662852a3cc06a3bf2e47947f89dc553`
+- Latest Actions run: `30796121004` — `test (3.10)` SUCCESS, `test (3.12)` SUCCESS, `wheel-install` SUCCESS
 
 ## Deferred Work (not release blockers for this PR scope)
 
