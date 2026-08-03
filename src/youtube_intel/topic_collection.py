@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from .errors import EvidenceIntegrityError, InvalidInputError
-from .io_utils import read_json, write_json, write_text
+from .io_utils import read_json, read_required_json, write_json, write_text
 from youtube_residual import build_residual_package, validate_package
 
 VIDEO_RECORD_SCHEMA_VERSION = "youtube_video_knowledge_record_v0.1"
@@ -1756,22 +1756,48 @@ def build_topic_demo_from_segments(
     segments_files = sorted(topic_dir.glob("video_*.json"))
     if not segments_files:
         raise InvalidInputError(f"no video_*.json files found in topic directory: {topic_dir}")
-    records: list[dict[str, Any]] = []
-    package_paths: list[str] = []
-    validation_paths: list[str] = []
+
+    # Phase 1: read and validate EVERY source file strictly before writing any
+    # artifact, so a malformed later source cannot leave a half-written
+    # successful-looking output directory behind.
+    prepared: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for segments_file in segments_files:
-        data = read_json(segments_file, {})
-        if not isinstance(data, dict) or not isinstance(data.get("segments"), list) or not data["segments"]:
+        data = read_required_json(segments_file, label=f"topic source file {segments_file.name}")
+        if not isinstance(data, dict):
             raise InvalidInputError(
-                f"topic segments file {segments_file} is empty or malformed "
-                f"(expected an object with a non-empty segments list)"
+                f"topic source file {segments_file.name} must be an object "
+                f"(got {type(data).__name__})"
             )
-        video = data.get("video") if isinstance(data.get("video"), dict) else {}
-        segments = data["segments"]
+        video = data.get("video")
+        if not isinstance(video, dict) or not video:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video is missing or not an object")
+        video_id = _text(video.get("video_id"))
+        title = _text(video.get("title"))
+        language = _text(video.get("language"))
+        # Real source identity is never fabricated from the filename stem.
+        if not video_id:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video.video_id is empty")
+        if not title:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video.title is empty")
+        if not language:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video.language is empty")
+        segments = data.get("segments")
+        if not isinstance(segments, list) or not segments:
+            raise InvalidInputError(
+                f"topic source file {segments_file.name}: segments must be a non-empty list"
+            )
+        for i, segment in enumerate(segments):
+            if not isinstance(segment, dict):
+                raise InvalidInputError(
+                    f"topic source file {segments_file.name} segment {i} is not an object "
+                    f"(got {type(segment).__name__})"
+                )
+            if not str(segment.get("text") or "").strip():
+                raise InvalidInputError(f"topic source file {segments_file.name} segment {i} has empty text")
         package = build_residual_package(
-            video_id=_text(video.get("video_id"), segments_file.stem),
-            title=_text(video.get("title"), segments_file.stem),
-            language=_text(video.get("language"), "en"),
+            video_id=video_id,
+            title=title,
+            language=language,
             duration_seconds=video.get("duration_seconds"),
             segments=segments,
             genre_override=video.get("genre"),
@@ -1779,16 +1805,15 @@ def build_topic_demo_from_segments(
         validation = validate_package(package).to_dict()
         if validation["status"] != "pass":
             raise InvalidInputError(
-                f"source package validation failed for {segments_file}: "
+                f"source package validation failed for {segments_file.name}: "
                 + "; ".join(validation["issues"][:8])
             )
-        package_dict = package.to_dict()
-        pkg_path = write_json(output_dir / "packages" / f"{package.video_id}_residual_package.json", package_dict)
-        val_path = write_json(output_dir / "packages" / f"{package.video_id}_validation.json", validation)
-        package_paths.append(str(pkg_path))
-        validation_paths.append(str(val_path))
-        records.append(build_video_knowledge_record(package_dict, topic_id=topic_id, topic_title=topic_title))
+        prepared.append((package.to_dict(), validation))
 
+    # Phase 2: build all records in memory.
+    records: list[dict[str, Any]] = []
+    for package_dict, _validation in prepared:
+        records.append(build_video_knowledge_record(package_dict, topic_id=topic_id, topic_title=topic_title))
     if not records:
         raise InvalidInputError("no valid video records were produced from the topic directory")
 
@@ -1801,10 +1826,27 @@ def build_topic_demo_from_segments(
     )
     if not collection.get("claim_groups") or collection.get("claim_total", 0) == 0:
         raise InvalidInputError("no claims were produced from the topic directory")
+
     expected_path = topic_dir / "expected_groupings.json"
     if expected_path.exists():
-        evaluation = evaluate_topic_collection(collection, read_json(expected_path, {}) or {})
-        collection["grouping_evaluation"] = evaluation
+        expected_data = read_required_json(expected_path, label="expected groupings")
+        if not isinstance(expected_data, dict):
+            raise InvalidInputError(
+                f"expected groupings {expected_path} must be an object (got {type(expected_data).__name__})"
+            )
+        must_link = expected_data.get("must_link")
+        if not isinstance(must_link, list):
+            raise InvalidInputError(f"expected groupings {expected_path}: must_link must be a list")
+        collection["grouping_evaluation"] = evaluate_topic_collection(collection, expected_data)
+
+    # Phase 3: write artifacts only after every source is validated.
+    package_paths: list[str] = []
+    validation_paths: list[str] = []
+    for package_dict, validation in prepared:
+        pkg_path = write_json(output_dir / "packages" / f"{_text(package_dict.get('video', {}).get('video_id'))}_residual_package.json", package_dict)
+        val_path = write_json(output_dir / "packages" / f"{_text(package_dict.get('video', {}).get('video_id'))}_validation.json", validation)
+        package_paths.append(str(pkg_path))
+        validation_paths.append(str(val_path))
     manifest = write_topic_bundle(output_dir, collection, records)
     if "grouping_evaluation" in collection:
         evaluation_path = write_json(output_dir / "grouping_evaluation.json", collection["grouping_evaluation"])

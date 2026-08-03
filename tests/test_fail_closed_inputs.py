@@ -64,7 +64,7 @@ def test_topic_demo_malformed_file_fails_closed(tmp_path, capsys) -> None:
     )
     assert rc == 2
     assert payload["ok"] is False
-    assert "empty or malformed" in payload["message"]
+    assert "video is missing or not an object" in payload["message"]
     assert not (out / "topic_handoff_manifest.json").exists()
 
 
