@@ -1232,8 +1232,8 @@ def _validate_claim_index(collection: dict[str, Any]) -> list[str]:
         for msg in _validate_optional_string(coord.get("speaker")):
             issues.append(f"claim_index[{index_key!r}].evidence_coordinate.speaker {msg}")
         coord_conf = coord.get("speaker_confidence")
-        if coord_conf is not None and coord_conf not in ("high", "medium", "low", "unknown"):
-            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.speaker_confidence must be one of high/medium/low/unknown or None")
+        if coord_conf not in ("high", "medium", "low", "unknown"):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.speaker_confidence must be one of high/medium/low/unknown")
         coord_mod = coord.get("modality")
         if isinstance(coord_mod, list) and coord_mod and not all(isinstance(m, str) and m.strip() for m in coord_mod):
             issues.append(f"claim_index[{index_key!r}].evidence_coordinate.modality contains an invalid entry")
@@ -1290,8 +1290,8 @@ def _validate_evidence_index(collection: dict[str, Any]) -> list[str]:
         for msg in _validate_optional_string(ev.get("speaker")):
             issues.append(f"evidence_index[{index_key!r}].speaker {msg}")
         conf = ev.get("speaker_confidence")
-        if conf is not None and conf not in ("high", "medium", "low", "unknown"):
-            issues.append(f"evidence_index[{index_key!r}].speaker_confidence must be one of high/medium/low/unknown or None")
+        if conf not in ("high", "medium", "low", "unknown"):
+            issues.append(f"evidence_index[{index_key!r}].speaker_confidence must be one of high/medium/low/unknown")
     return issues
 
 
@@ -1379,6 +1379,23 @@ def _validate_claim_groups(collection: dict[str, Any]) -> list[str]:
                 issues.append(f"group {gid!r}: coordinate evidence_id does not resolve")
             elif isinstance(evidence_index.get(cid), dict):
                 _append_coordinate_mismatches(issues, f"group {gid!r}", coord, evidence_index[cid])
+            # Independently validate each group coordinate. Matching invalid
+            # values across the group and evidence index must still fail.
+            for ts_field in ("timestamp_start", "timestamp_end"):
+                for msg in _validate_optional_timestamp(coord.get(ts_field)):
+                    issues.append(f"group {gid!r} coordinate.{ts_field} {msg}")
+            for msg in _validate_optional_string(coord.get("time_ref")):
+                issues.append(f"group {gid!r} coordinate.time_ref {msg}")
+            for msg in _validate_optional_string(coord.get("speaker")):
+                issues.append(f"group {gid!r} coordinate.speaker {msg}")
+            coord_conf = coord.get("speaker_confidence")
+            if coord_conf not in ("high", "medium", "low", "unknown"):
+                issues.append(f"group {gid!r} coordinate.speaker_confidence must be one of high/medium/low/unknown")
+            coord_modality = coord.get("modality")
+            if not isinstance(coord_modality, list) or not coord_modality or not all(
+                isinstance(item, str) and item.strip() for item in coord_modality
+            ):
+                issues.append(f"group {gid!r} coordinate.modality must be a non-empty list of non-empty strings")
         # Every group evidence id must have a corresponding coordinate.
         for eid in seen_ev:
             if eid not in coord_ids:
@@ -1410,6 +1427,8 @@ def _validate_terrain(collection: dict[str, Any]) -> list[str]:
     fact = terrain.get("fact_check_status")
     if fact != "not_performed":
         issues.append(f"terrain.fact_check_status must be 'not_performed', got {fact!r}")
+    if not isinstance(terrain.get("operator_judgment_required"), bool):
+        issues.append("terrain.operator_judgment_required must be a boolean")
     for key in ("repeated_claim_group_ids", "disagreement_group_ids", "outlier_group_ids"):
         if key not in terrain:
             issues.append(f"terrain is missing required field: {key}")
@@ -1456,6 +1475,23 @@ def _validate_terrain(collection: dict[str, Any]) -> list[str]:
             cgid = rel.get("claim_group_id")
             if cgid not in group_ids:
                 issues.append(f"disagreement relation references nonexistent group: {cgid!r}")
+            relation_type = rel.get("relation_type")
+            if relation_type not in (
+                "support_vs_caution",
+                "alternative_explanation",
+                "opposing_stances_pair",
+                "numeric_mismatch",
+                "framing_conflict",
+                "unknown",
+            ):
+                issues.append(f"disagreement relation has invalid relation_type: {relation_type!r}")
+            confidence = rel.get("confidence")
+            if confidence not in ("high", "medium", "low"):
+                issues.append(f"disagreement relation has invalid confidence: {confidence!r}")
+            if not isinstance(rel.get("human_review_required"), bool):
+                issues.append("disagreement relation human_review_required must be a boolean")
+            if not isinstance(rel.get("why_flagged"), str):
+                issues.append("disagreement relation why_flagged must be a string")
             rel_uids = _as_list(rel.get("claim_uids"))
             if not isinstance(rel.get("claim_uids"), list):
                 issues.append("disagreement relation claim_uids must be a list")
@@ -1476,6 +1512,19 @@ def _validate_terrain(collection: dict[str, Any]) -> list[str]:
             cgid = od.get("claim_group_id")
             if cgid not in group_ids:
                 issues.append(f"outlier detail references nonexistent group: {cgid!r}")
+            outlier_type = od.get("outlier_type")
+            if outlier_type not in (
+                "single_source_outlier",
+                "low_source_diversity_outlier",
+                "semantic_outlier",
+                "high_stakes_single_source",
+            ):
+                issues.append(f"outlier detail has invalid outlier_type: {outlier_type!r}")
+            followup_priority = od.get("followup_priority")
+            if followup_priority not in ("low", "medium", "high"):
+                issues.append(f"outlier detail has invalid followup_priority: {followup_priority!r}")
+            if not isinstance(od.get("why_outlier"), str):
+                issues.append("outlier detail why_outlier must be a string")
             od_uids = _as_list(od.get("claim_uids"))
             if not isinstance(od.get("claim_uids"), list):
                 issues.append("outlier detail claim_uids must be a list")

@@ -29,6 +29,7 @@ Heuristics (see docs/CLAIM_ASSEMBLY.md)
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -292,8 +293,13 @@ def assemble_sentences(
 
 
 def parse_timestamp(value) -> float | None:
-    """Parse a timestamp into seconds. Accepts float/int seconds or ``mm:ss`` /
-    ``hh:mm:ss`` strings. Returns None on failure."""
+    """Parse seconds or a well-formed ``mm:ss`` / ``hh:mm:ss`` timestamp.
+
+    Clock forms are strict: component signs are rejected, seconds must be less
+    than 60, and the minute component in ``hh:mm:ss`` must be less than 60.
+    ``mm:ss`` intentionally permits minutes above 59 for long-form media.
+    Returns ``None`` on failure.
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -302,14 +308,32 @@ def parse_timestamp(value) -> float | None:
     if not text:
         return None
     parts = text.split(":")
+    seconds_pattern = r"\d+(?:\.\d+)?"
     try:
         if len(parts) == 3:
-            h, m, s = parts
-            return int(h) * 3600 + int(m) * 60 + float(s)
+            hours, minutes, seconds_text = parts
+            if not hours.isdigit() or not minutes.isdigit():
+                return None
+            if re.fullmatch(seconds_pattern, seconds_text) is None:
+                return None
+            minute_value = int(minutes)
+            second_value = float(seconds_text)
+            if minute_value >= 60 or second_value >= 60:
+                return None
+            return int(hours) * 3600 + minute_value * 60 + second_value
         if len(parts) == 2:
-            m, s = parts
-            return int(m) * 60 + float(s)
-        return float(parts[0])
+            minutes, seconds_text = parts
+            if not minutes.isdigit():
+                return None
+            if re.fullmatch(seconds_pattern, seconds_text) is None:
+                return None
+            second_value = float(seconds_text)
+            if second_value >= 60:
+                return None
+            return int(minutes) * 60 + second_value
+        if len(parts) == 1:
+            return float(parts[0])
+        return None
     except (ValueError, IndexError):
         return None
 

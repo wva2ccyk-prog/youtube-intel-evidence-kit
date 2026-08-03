@@ -6,6 +6,7 @@ additional properties) plus Python-level reference integrity.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -340,9 +341,9 @@ def test_schema_and_runtime_parity_on_mutation_corpus() -> None:
         lambda d: d.update(limitations="not-a-list"),
     ]
     for mutate in corpus:
-        doc = _base_doc()
-        doc["claim_index"] = dict(valid_claim_index)
-        doc["evidence_index"] = dict(valid_evidence_index)
+        doc = copy.deepcopy(_base_doc())
+        assert not validate_topic_collection_document(doc)
+        assert not _schema_errors(doc)
         mutate(doc)
         python_errors = validate_topic_collection_document(doc)
         schema_errors = _schema_errors(doc)

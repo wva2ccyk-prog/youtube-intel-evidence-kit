@@ -38,7 +38,7 @@
         "required": ["video_id", "title", "role_in_topic", "transcript_source", "transcript_quality"],
         "properties": {
           "video_id": {"type": "string", "minLength": 1},
-          "title": {"type": ["string", "null"]},
+          "title": {"type": "string"},
           "role_in_topic": {"type": "string"},
           "transcript_source": {"type": "string"},
           "transcript_quality": {"type": "string"}

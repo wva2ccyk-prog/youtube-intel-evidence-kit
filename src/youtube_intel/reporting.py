@@ -161,14 +161,40 @@ def validate_handoff_inputs(
             if cid in seen_trace_ids:
                 issues.append(f"analysis_worth source_trace duplicate claim_id: {cid!r}")
             seen_trace_ids.add(cid)
-            # Meaningful row contract: evidence and confidence must be non-empty
-            # strings; time_ref must be a string when the source claim has one.
-            _required_nonempty_str(trace_item.get("evidence"), field=f"source_trace row {i} evidence", issues=issues)
-            _required_nonempty_str(trace_item.get("confidence"), field=f"source_trace row {i} confidence", issues=issues)
+            # Both the trace row and its source claim carry a complete,
+            # strictly typed semantic identity. Missing source fields must not
+            # allow a trace to invent plausible content.
+            trace_evidence = _required_nonempty_str(
+                trace_item.get("evidence"), field=f"source_trace row {i} evidence", issues=issues
+            )
+            trace_confidence = _required_nonempty_str(
+                trace_item.get("confidence"), field=f"source_trace row {i} confidence", issues=issues
+            )
+            trace_type = _required_nonempty_str(
+                trace_item.get("claim_type"), field=f"source_trace row {i} claim_type", issues=issues
+            )
             source_claim = package_claims[cid]
+            source_type = _required_nonempty_str(
+                source_claim.get("content_type"), field=f"package claim {cid!r} content_type", issues=issues
+            )
+            source_evidence = _required_nonempty_str(
+                source_claim.get("evidence"), field=f"package claim {cid!r} evidence", issues=issues
+            )
+            source_confidence = _required_nonempty_str(
+                source_claim.get("confidence"), field=f"package claim {cid!r} confidence", issues=issues
+            )
+
             trace_time = trace_item.get("time_ref")
-            source_time = source_claim.get("time_ref")
             trace_has_time = "time_ref" in trace_item
+            source_has_time = "time_ref" in source_claim
+            source_time = source_claim.get("time_ref")
+            if not source_has_time:
+                issues.append(f"package claim {cid!r} is missing time_ref")
+            elif source_time is not None and (
+                not isinstance(source_time, str) or not source_time.strip()
+            ):
+                issues.append(f"package claim {cid!r} time_ref must be a non-empty string or None")
+
             # Exact source-trace timestamp coherence: a trace row may never
             # invent a timestamp absent from the source claim, and when the
             # source claim has a timestamp the trace must match it exactly.
@@ -180,28 +206,24 @@ def validate_handoff_inputs(
             else:
                 if not trace_has_time:
                     issues.append(f"source_trace row {i} is missing time_ref")
-                elif not isinstance(trace_time, str):
-                    issues.append(f"source_trace row {i} time_ref must be a string")
+                elif not isinstance(trace_time, str) or not trace_time.strip():
+                    issues.append(f"source_trace row {i} time_ref must be a non-empty string")
                 elif trace_time != source_time:
                     issues.append(
                         f"source_trace row {i} time_ref does not match source claim"
                     )
-            # Whole-trace coherence: contradicting claim_type/content_type is
-            # reported rather than silently accepted.
-            source_type = source_claim.get("content_type")
-            trace_type = trace_item.get("claim_type")
-            if source_type and trace_type and _text(trace_type) != _text(source_type):
+
+            if source_type is not None and trace_type is not None and (
+                trace_item.get("claim_type") != source_claim.get("content_type")
+            ):
                 issues.append(f"source_trace row {i} claim_type does not match source claim")
-            # Evidence / confidence coherence: when the source claim declares an
-            # evidence or confidence value, a trace row that contradicts it is
-            # reported rather than silently accepted.
-            source_evidence = source_claim.get("evidence")
-            trace_evidence = trace_item.get("evidence")
-            if source_evidence and trace_evidence and _text(trace_evidence) != _text(source_evidence):
+            if source_evidence is not None and trace_evidence is not None and (
+                trace_item.get("evidence") != source_claim.get("evidence")
+            ):
                 issues.append(f"source_trace row {i} evidence does not match source claim")
-            source_confidence = source_claim.get("confidence")
-            trace_confidence = trace_item.get("confidence")
-            if source_confidence and trace_confidence and _text(trace_confidence) != _text(source_confidence):
+            if source_confidence is not None and trace_confidence is not None and (
+                trace_item.get("confidence") != source_claim.get("confidence")
+            ):
                 issues.append(f"source_trace row {i} confidence does not match source claim")
     return issues
 
