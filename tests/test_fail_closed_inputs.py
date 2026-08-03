@@ -194,4 +194,3 @@ def test_topic_mcp_facade_accepts_valid_collection(tmp_path) -> None:
     loaded = load_topic_collection(collection_path)
     assert loaded["analysis_layer"] == "cross_video_topic_collection"
     assert loaded["claim_total"] > 0
-

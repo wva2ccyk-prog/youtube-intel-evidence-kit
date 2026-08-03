@@ -116,4 +116,3 @@ def test_clean_removes_generated_output(tmp_path: Path, monkeypatch, capsys) -> 
     assert payload["ok"] is True
     assert payload["removed"] == [str(target.resolve())]
     assert not target.exists()
-

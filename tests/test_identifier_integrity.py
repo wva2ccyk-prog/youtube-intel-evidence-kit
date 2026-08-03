@@ -204,4 +204,3 @@ def test_valid_records_pass():
     ]
     collection = build_topic_collection(records, topic_id="t", topic_title="T")
     assert collection["claim_total"] == 2
-

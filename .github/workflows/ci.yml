@@ -129,4 +129,3 @@ jobs:
           assert not errors, "; ".join(f"{list(e.path)}: {e.message}" for e in errors[:5])
           print("generated TopicCollection validates against schema")
           EOF
-

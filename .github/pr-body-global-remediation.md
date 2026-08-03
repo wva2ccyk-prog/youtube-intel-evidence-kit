@@ -87,4 +87,3 @@ python -m compileall -q src tests scripts      # ok
 python -m youtube_mcp_handoff.smoke            # PASSED
 python -m build --wheel && inspect fixtures    # 12 fixture entries, no __pycache__
 ```
-

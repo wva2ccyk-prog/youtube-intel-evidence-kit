@@ -194,4 +194,3 @@ def test_opinion_groups_reflect_majority_axis() -> None:
     axes = {og["axis"] for og in opinion_groups}
     assert "supporting" in axes
     assert "challenging" in axes
-
