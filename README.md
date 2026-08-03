@@ -75,16 +75,16 @@ because the scan rejects bytecode/cache artifacts.
 
 | Command | Purpose |
 |---|---|
-| `youtube-intel doctor` | Check package posture, optional plugins, topic demo availability, and public-safety ignore rules |
+| `youtube-intel doctor` | Health check: runtime_mode, fixture availability, gitignore safety, and repo-only script presence; exit 2 when unhealthy |
 | `youtube-intel topic-demo --out outputs/topic_demo` | Run synthetic cross-video `VideoKnowledgeRecord -> TopicCollection -> topic terrain` flow |
 | `youtube-intel topic-demo --out outputs/topic_demo_jaccard --clusterer token_jaccard` | Run the same flow with the stricter deterministic token-overlap clusterer |
 | `youtube-intel single-video-demo --out outputs/demo` | Run synthetic single-video residual package -> analysis-worth -> AI handoff flow |
-| `youtube-intel package --segments examples/synthetic_segments.json --out outputs/pkg` | Build a residual package from admitted segment JSON |
+| `youtube-intel package --segments examples/synthetic_segments.json --out outputs/pkg --video-id ID --title "T" --language en` | Build a residual package from admitted segment JSON (video_id/title/language are required; never synthesised) |
 | `youtube-intel worth --package outputs/pkg/residual_package.json --out outputs/worth` | Generate analysis-worth JSON and Markdown |
-| `youtube-intel single-video-handoff --package ... --analysis-worth ... --out outputs/handoff` | Build AI CLI handoff files for a single-video input-layer evidence packet |
+| `youtube-intel single-video-handoff --package ... --analysis-worth ... --out outputs/handoff` | Build AI CLI handoff files from a structurally valid, coherent package+worth pair (complete bundle) |
 | `youtube-intel mcp-stdio` | Run the legacy read-only synthetic overlay MCP-style JSON-RPC stdio smoke server |
 | `youtube-intel topic-mcp-stdio --topic-collection outputs/topic_demo/topic_collection.json` | Run the read-only TopicCollection MCP-ready JSON-RPC stdio handoff facade |
-| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts (repository-bound and fail-closed; `--dry-run` to preview, `--force` for non-generated repo paths) |
+| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts (source-checkout only; repository-bound and fail-closed; `--dry-run` to preview, `--force` for non-generated repo paths, never protected source dirs) |
 
 ## Operator Loop
 
