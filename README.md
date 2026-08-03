@@ -25,11 +25,13 @@ This is not meant for broad scraping, channel-wide monitoring, public truth cert
 ```bash
 python -m venv .venv
 . .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -e .[dev]
+python -m pip install youtube-intel-evidence-kit==0.1.0
 youtube-intel doctor
 youtube-intel topic-demo --out outputs/topic_demo
 youtube-intel topic-demo --out outputs/topic_demo_jaccard --clusterer token_jaccard --token-jaccard-threshold 0.45
 ```
+
+For source development, clone the repository and install `.[dev]` in editable mode.
 
 Inspect the generated cross-video terrain files:
 
@@ -55,9 +57,10 @@ The older single-video demo is still available because it is the input layer:
 youtube-intel single-video-demo --out outputs/demo
 ```
 
-Run tests and public smoke checks:
+Run tests and public smoke checks from a source checkout:
 
 ```bash
+python -m pip install -e ".[dev]"
 python -m pytest -q tests
 python -m youtube_mcp_handoff.smoke
 python scripts/public_release_leak_scan.py
@@ -136,7 +139,6 @@ The public package should contain source code, synthetic examples, tests, schema
 
 High-risk claims should be treated as video-internal claims until a separate source-verification process is approved and run.
 
-
 ## YouTube / Transcript Boundary
 
 This package does not ship real YouTube transcripts, copyrighted captions, downloaded video/audio, or media-derived artifacts. It also does not bundle any media-acquisition tooling: there is no downloader, scraper, or media-processing path in the public package. The public demo uses synthetic fixtures only, and the package otherwise accepts operator-provided evidence records as admitted input.
@@ -149,7 +151,6 @@ If an operator uses this package with real videos, the operator alone is respons
 - bypass, circumvent, or defeat any platform access control, rate limit, or technical protection measure.
 
 Transcript or caption availability is not license clearance. The fact that text can be obtained does not grant any right to copy, store, redistribute, or analyze it. Operators must comply with YouTube/platform terms, copyright law, and local law, and obtain any required permissions before supplying real evidence to this package.
-
 
 ## AI App / MCP Handoff
 
@@ -175,11 +176,13 @@ For local smoke testing, `youtube-intel mcp-stdio` runs a minimal overlay JSON-R
 
 Status: `alpha_cross_video_evidence_contract_with_deterministic_grouping_demo`.
 
+Version: `0.1.0` first public alpha.
+
 License: `MIT`.
 
 Scope: alpha public package with synthetic fixtures only; no real video artifacts, no shipped transcripts/media, and no private pilot data.
 
-The deterministic core, CLI user flow, labeled synthetic topic demo, single-video handoff bundle, public leak scan, and smoke tests are present. This is still alpha positioning: real topic synthesis needs larger fixtures, semantic grouping upgrades, weighting, caching, benchmarks, and human review before stronger claims. Public release still requires owner review before publishing or submitting anywhere.
+The deterministic core, CLI user flow, labeled synthetic topic demo, single-video handoff bundle, public leak scan, and smoke tests are present. This is still alpha positioning: real topic synthesis needs larger fixtures, semantic grouping upgrades, weighting, caching, benchmarks, and human review before stronger claims.
 
 ## License
 
@@ -188,5 +191,3 @@ MIT
 ## Public Demo Boundary
 
 The public `topic-demo` is an alpha deterministic contract demo over synthetic fixtures. It now demonstrates local claim normalization, normalized lexical similarity grouping, optional token-Jaccard grouping, stance-derived opinion groups, contradiction candidates, pair-agreement evaluation, evidence coordinates, repeated claim groups, outliers, and AI/MCP-style handoff files. It is not a production semantic clustering engine. Real topic synthesis still needs optional embedding-based semantic grouping, stronger stance clustering, calibrated contradiction detection, source/speaker weighting, caching, broader benchmarks, and human review for uncertain groups.
-
-
