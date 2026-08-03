@@ -16,6 +16,7 @@ from youtube_intel.hesitation_markers import (
     render_markers_markdown,
 )
 from youtube_intel.io_utils import read_json, read_required_json, write_json, write_text
+from youtube_intel.package_validation import RESERVED_FALLBACK_IDS, require_nonempty_string
 from youtube_intel.reporting import write_handoff_bundle
 from youtube_intel.topic_collection import CLUSTERERS, build_topic_demo_from_segments
 from youtube_plugins.registry import check_all
@@ -148,27 +149,25 @@ def cmd_package(args: argparse.Namespace) -> int:
         )
     # The general package command must never fabricate a synthetic identity:
     # video_id and title must come from --video-id/--title or the input file.
-    video_id = args.video_id or video.get("video_id")
-    if not video_id or not str(video_id).strip():
-        raise InvalidInputError(
-            "package requires a non-empty video_id from --video-id or the input file's video.video_id"
-        )
-    title = args.title or video.get("title")
-    if not title or not str(title).strip():
-        raise InvalidInputError(
-            "package requires a non-empty title from --title or the input file's video.title"
-        )
-    language = args.language or video.get("language")
-    if not language or not str(language).strip():
-        # `und` is the explicit documented escape hatch for undefined language.
-        raise InvalidInputError(
-            "package requires a non-empty language from --language or the input file's "
-            "video.language (use the explicit value 'und' for an undefined language)"
-        )
+    # Identity values must be real strings (never coerced via str()).
+    video_id = require_nonempty_string(
+        args.video_id if args.video_id is not None else video.get("video_id"),
+        field="video_id",
+    )
+    if video_id in RESERVED_FALLBACK_IDS:
+        raise InvalidInputError(f"video_id uses reserved fallback id: {video_id!r}")
+    title = require_nonempty_string(
+        args.title if args.title is not None else video.get("title"),
+        field="title",
+    )
+    language = require_nonempty_string(
+        args.language if args.language is not None else video.get("language"),
+        field="language",
+    )
     package = build_residual_package(
-        video_id=str(video_id),
-        title=str(title),
-        language=str(language),
+        video_id=video_id,
+        title=title,
+        language=language,
         segments=segments,
         duration_seconds=args.duration_seconds or video.get("duration_seconds"),
         genre_override=args.genre,

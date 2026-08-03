@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -115,3 +117,61 @@ def test_demo_commands_still_use_synthetic_fixtures(tmp_path) -> None:
     assert payload["ok"] is True
     package = json.loads(Path(payload["paths"]["residual_package_json"]).read_text(encoding="utf-8"))
     assert package["video"]["video_id"] == "synthetic-field-demo"
+
+# --- Fourth pass (Section 7): package CLI must reject non-string identity ----
+
+
+def _write_pkg_segments(tmp_path: Path, video: dict) -> Path:
+    f = tmp_path / "segments.json"
+    f.write_text(json.dumps({"video": video, "segments": [{"text": "A real segment with enough words to make a claim.", "speaker": "A"}]}), encoding="utf-8")
+    return f
+
+
+def _assert_identity_failure(result: subprocess.CompletedProcess, out: Path) -> dict:
+    assert result.returncode == 2, f"stdout={result.stdout} stderr={result.stderr}"
+    assert "Traceback" not in result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"] == "InvalidInputError"
+    assert not (out / "residual_package.json").exists()
+    return payload
+
+
+@pytest.mark.parametrize("video, needle", [
+    ({"video_id": 123, "title": "T", "language": "en"}, "video_id must be a string"),
+    ({"video_id": True, "title": "T", "language": "en"}, "video_id must be a string"),
+    ({"video_id": "v1", "title": {}, "language": "en"}, "title must be a string"),
+    ({"video_id": "v1", "title": ["x"], "language": "en"}, "title must be a string"),
+    ({"video_id": "v1", "title": "T", "language": 4}, "language must be a string"),
+    ({"video_id": "   ", "title": "T", "language": "en"}, "video_id is empty"),
+    ({"video_id": "v1", "title": "   ", "language": "en"}, "title is empty"),
+    ({"video_id": "v1", "title": "T", "language": "  "}, "language is empty"),
+    ({"video_id": "unknown-video", "title": "T", "language": "en"}, "reserved fallback"),
+])
+def test_package_cli_rejects_non_string_identity(tmp_path, video, needle) -> None:
+    f = _write_pkg_segments(tmp_path, video)
+    out = tmp_path / "out"
+    r = _run_cli("package", "--segments", str(f), "--out", str(out))
+    payload = _assert_identity_failure(r, out)
+    assert needle in payload["message"]
+
+
+def test_package_cli_accepts_valid_unicode_identity(tmp_path) -> None:
+    f = _write_pkg_segments(tmp_path, {"video_id": "비디오-1", "title": "한국어 제목", "language": "ko"})
+    out = tmp_path / "out"
+    r = _run_cli("package", "--segments", str(f), "--out", str(out))
+    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+    pkg = json.loads((out / "residual_package.json").read_text(encoding="utf-8"))
+    assert pkg["video"]["video_id"] == "비디오-1"
+    assert pkg["video"]["title"] == "한국어 제목"
+    assert pkg["video"]["language"] == "ko"
+
+
+def test_package_cli_accepts_und_language(tmp_path) -> None:
+    f = _write_pkg_segments(tmp_path, {"video_id": "v1", "title": "T", "language": "und"})
+    out = tmp_path / "out"
+    r = _run_cli("package", "--segments", str(f), "--out", str(out))
+    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+    pkg = json.loads((out / "residual_package.json").read_text(encoding="utf-8"))
+    assert pkg["video"]["language"] == "und"
+

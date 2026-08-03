@@ -44,6 +44,24 @@ def _required_nonempty_string(
     return normalized
 
 
+def require_nonempty_string(value: Any, *, field: str) -> str:
+    """Return the stripped non-empty string or raise InvalidInputError.
+
+    Shared by the ``package`` CLI and other public entry points so non-string
+    (numeric/boolean/object/list) and whitespace-only identity values are
+    rejected rather than coerced via ``str()``. ``und`` is accepted because it
+    is a real, non-empty language string.
+    """
+    from .errors import InvalidInputError
+
+    if not isinstance(value, str):
+        raise InvalidInputError(f"{field} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise InvalidInputError(f"{field} is empty")
+    return normalized
+
+
 def validate_residual_package_dict(package: Any) -> list[str]:
     """Return structural issues for a residual package dictionary.
 
