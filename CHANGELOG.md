@@ -1,64 +1,48 @@
 # Changelog
 
-All notable changes to this project are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims
-to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it
-leaves alpha. For low-level implementation notes see
-`IMPLEMENTATION_CHANGELOG.md`.
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). For low-level
+implementation notes, see `IMPLEMENTATION_CHANGELOG.md`.
 
 ## [Unreleased]
 
-### Added
-- Added Tier-1 **hesitation markers** (`youtube_intel.hesitation_markers`,
-  `youtube-intel hesitation-demo`). Deterministic, stdlib-only detection of
-  mid-span pauses, isolated Korean fillers, and restarts from word-level
-  timestamps — making the thesis's named "hesitation that reveals uncertainty"
-  a concrete, operator-reviewable artifact. `hesitation_score` is `null` by
-  design (a listen-and-judge cue, never a confidence/truth score); artifacts are
-  typed `modality_source: audio` / `evidence_state: operator_review_required`
-  and carry a mandatory disclaimer. ASR is not bundled — word timestamps come
-  from a need-gated operator-side escalation pass. See `docs/HESITATION_MARKERS.md`.
-- Added opt-in Korean-aware **claim assembly** (`youtube_intel.sentence_assembly`,
-  `youtube-intel package --claim-assembly sentence`). Merges punctuation-free
-  caption cues into sentence-like units before claim extraction, so claims are
-  whole thoughts rather than mid-sentence fragments — the input-quality
-  prerequisite for roadmap step 1 (claim normalization). Default `cue` is
-  byte-identical to prior behavior; deterministic, stdlib-only, and it preserves
-  cue-index/timestamp traceability. See `docs/CLAIM_ASSEMBLY.md`.
-- Added stance-derived cross-video opinion groups to `TopicCollection` output.
-  Opinion groups roll claim groups up into supporting, challenging,
-  alternative, and reported position buckets without ranking truth.
-- Added the deterministic `token_jaccard` clusterer option for `topic-demo` and
-  the library API. It is local-only and requires no network, embeddings, or
-  model downloads.
+No unreleased changes.
 
-### Changed
-- Modernized packaging license metadata to the SPDX `license = "MIT"` string
-  plus `license-files`, removing the deprecated setuptools license table and
-  the redundant license classifier.
-- `topic-demo` now writes opinion-group ids and warnings into the terrain
-  section and renders an `Opinion Groups` section in `topic_terrain.md`.
+## [0.1.0] - 2026-08-03
 
-### Documentation
-- Added this changelog, a public `ROADMAP.md` pointing at the cross-video engine
-  plan, and GitHub issue/pull-request templates to make maintenance and
-  contribution expectations explicit.
-- Documented the `topic-demo --clusterer token_jaccard` path in `README.md`.
-
-## [0.1.0] - 2026-06-30
+First public alpha release.
 
 ### Added
-- Initial public alpha release of the cross-video opinion-terrain evidence kit:
-  `VideoKnowledgeRecord` and `TopicCollection` contracts, the deterministic
-  `topic-demo`, the analysis-worth gate, and the read-only MCP handoff path.
-- Installable CLI (`youtube-intel doctor`, `demo`, `package`, `worth`,
-  `handoff`, `mcp-stdio`).
-- GitHub Actions CI running the test suite on each push.
 
-### Notes
-- This is an alpha evidence contract, not a production YouTube intelligence
-  engine or single-video summarizer. It does not bundle `yt_dlp` or `ffmpeg`
-  and does not decide truth. See `docs/SCOPE_BOUNDARY.md`.
+- Cross-video `VideoKnowledgeRecord` and `TopicCollection` evidence contracts.
+- Deterministic opinion-terrain grouping, disagreement candidates, outliers,
+  opinion groups, and evidence-coordinate preservation.
+- Caption-first residual packaging, analysis-worth cost gates, and validated
+  AI/MCP-ready handoff bundles.
+- Source-checkout and installed-wheel runtime modes with packaged synthetic
+  fixtures.
+- Dependency-free runtime validation aligned with the published JSON Schema.
+- Strict timestamp parsing and source/trace semantic-coherence checks.
+- Fail-closed CLI errors with no partial output artifacts on invalid input.
+- Optional Korean-aware sentence assembly and hesitation-marker surfacing.
+- Python 3.10 and 3.12 CI plus clean-wheel installation and demo verification.
+
+### Corrected before release
+
+- Installed-package fixture discovery and doctor behavior.
+- Empty-input success paths and malformed-input traceback leakage.
+- Korean tokenization and ambiguous medical `용량` marker collisions.
+- Fixture-specific aside-detector overfitting and broad single-marker Type 1
+  classifications.
+- TopicCollection relation, outlier, terrain, coordinate, and nullable
+  schema/runtime parity.
+
+### Boundaries
+
+- Alpha heuristic tooling; not truth verification.
+- Synthetic fixtures only; no media acquisition, scraping, or bundled real
+  transcripts.
+- No medical, financial, legal, investment, or political advice.
 
 [Unreleased]: https://github.com/wva2ccyk-prog/youtube-intel-evidence-kit/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/wva2ccyk-prog/youtube-intel-evidence-kit/releases/tag/v0.1.0
