@@ -27,7 +27,7 @@ End-to-end/CLI tests added for opinion-axis majority, cue timing provenance thro
 
 ## Exact Verification (latest)
 
-- `python -m pytest -W error -q -p no:cacheprovider` -> **342 passed, 0 warnings**
+- `python -m pytest -W error -q -p no:cacheprovider` -> **343 passed, 0 warnings**
 - `python scripts/check_encoding.py` -> passed
 - `python scripts/public_release_leak_scan.py` -> PASSED
 - `python -m compileall -q src tests scripts` -> ok
