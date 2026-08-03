@@ -49,6 +49,10 @@ def test_packaged_fixtures_match_examples_byte_for_byte() -> None:
     for packaged, source_rel in PACKAGED_TO_EXAMPLES.items():
         examples_path = REPO_ROOT / "examples" / source_rel
         packaged_path = PACKAGED_ROOT / packaged
+        # Directory entries (e.g. topic_demo) are containers; their files are
+        # covered by the individual file entries in the map.
+        if examples_path.is_dir() or packaged_path.is_dir():
+            continue
         assert examples_path.is_file(), f"examples source missing: {source_rel}"
         assert packaged_path.is_file(), f"packaged fixture missing: {packaged}"
         assert _digest(examples_path) == _digest(packaged_path), (

@@ -492,13 +492,21 @@ def _make_evidence_record(
     span_end: Any = None,
     source_cue_coordinates: list[Any] | None = None,
 ) -> dict[str, Any]:
-    timestamp_start = _parse_time_ref_to_seconds(time_ref)
+    # Real structured span takes precedence over the display-oriented time_ref;
+    # keep full fractional precision and never round. End stays None when no
+    # real span end exists (no fabricated timestamp).
+    timestamp_start = (
+        float(span_start)
+        if span_start is not None
+        else _parse_time_ref_to_seconds(time_ref)
+    )
+    timestamp_end = float(span_end) if span_end is not None else None
     evidence_id = f"{video_id}:E{local_index:04d}"
     return {
         "evidence_id": evidence_id,
         "video_id": video_id,
         "timestamp_start": timestamp_start,
-        "timestamp_end": None,
+        "timestamp_end": timestamp_end,
         "time_ref": time_ref,
         "speaker": speaker,
         "speaker_confidence": "high" if speaker not in (None, "", "unknown") else "unknown",

@@ -28,6 +28,7 @@ PACKAGED_TO_EXAMPLES: dict[str, str] = {
     "synthetic_transcript.vtt": "synthetic_transcript.vtt",
     "operator_overlay.json": "synthetic_overlay_demo/operator_overlay.json",
     "release_readiness_report.json": "synthetic_overlay_demo/release_readiness_report.json",
+    "topic_demo": "topic_demo",
     "topic_demo/expected_groupings.json": "topic_demo/expected_groupings.json",
     "topic_demo/video_a.json": "topic_demo/video_a.json",
     "topic_demo/video_b.json": "topic_demo/video_b.json",
@@ -63,16 +64,16 @@ def fixture_path(name: str) -> Path:
     """Return a Path to a fixture.
 
     A detected source checkout resolves the canonical repository-root
-    ``examples/`` file via :data:`PACKAGED_TO_EXAMPLES`. An installed package
-    (or a name with no source mapping) falls back to ``youtube_intel._fixtures``
-    package data.
+    ``examples/`` path via :data:`PACKAGED_TO_EXAMPLES` (both files and
+    directories such as ``topic_demo``). An installed package (or a name with
+    no source mapping) falls back to ``youtube_intel._fixtures`` package data.
     """
     root = find_source_root()
     if root is not None:
         examples_rel = PACKAGED_TO_EXAMPLES.get(name)
         if examples_rel:
             examples = root / "examples" / examples_rel
-            if examples.is_file():
+            if examples.exists():
                 return examples
     return Path(_resources.files("youtube_intel._fixtures").joinpath(name))
 
