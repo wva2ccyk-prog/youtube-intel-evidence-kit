@@ -1,90 +1,59 @@
-# Global Audit Remediation: Evidence Integrity, Installed-Package Behavior, and Fail-Closed Validation
+# Global Audit Remediation + Independent-Review Corrective Pass
 
 ## Summary
 
-Code-level remediation of the global audit findings. This is **not** a documentation-only change: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries were all fixed. It builds on **PR #1** (run-verified audit, `review/global-audit-2026-08`) but does not merge it as-is; the implementation branch is based on current `main` and incorporates additional critical defects found during the fix.
+Code-level remediation of the global audit findings, **plus a corrective pass addressing every merge-blocking defect found in the independent review** of PR #2. This is not a documentation-only change: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries were fixed and are enforced by regression tests, CI, and a live PR description that matches the implementation.
 
-## Root Causes Fixed
+**Not merged.** Draft opened and returned to ready-for-review only after all checks pass.
 
-1. **Speaker/timestamp/modality provenance loss (P0-A)** - `assemble_segments_to_sentences()` could merge cues across speaker/modality/source-hint boundaries and attribute the merged text to the first speaker. Speaker, modality, and source-hint changes now force an assembly boundary; assembled units and serialized claims carry `cue_indices`, `source_time_refs`, `span_start`, `span_end`, `speaker`, `modality`, `source_hint`.
-2. **Input record mutation (P0-B)** - `build_topic_collection()` wrote `claim_group_key`/`claim_group_label`/`normalized_tokens` onto caller dicts and hashed after mutation. Now works on deep copies; `input_record_hashes` are computed from original inputs before any transformation.
-3. **Duplicate/dangling identifier overwrite (P0-C)** - `videos[video_id]`, `claim_index[claim_uid]`, `evidence_index[evidence_id]` silently overwrote duplicates; fallback IDs (`unknown-video`, etc.) made collisions easy. The build now fails closed with `EvidenceIntegrityError`.
-4. **Broad empty-input success paths (P0-D)** - `topic-demo`, `package`, `worth`, `handoff`, `hesitation-demo`, and the TopicCollection MCP facade returned successful artifacts for missing/empty/malformed inputs. All now fail with structured `InvalidInputError` (exit code 2), and no final manifest is written after a failed source validation.
-5. **Single-video handoff manifest mismatch (P0-E)** - `write_handoff_bundle()` wrote `handoff_manifest.json` before adding its own path to the in-memory `paths`; returned and on-disk manifests were different. The complete manifest is now constructed first, then written.
-6. **Cluster bridge chaining / input-order dependence (P1-A)** - the single-link rule let weak bridges (A~B~C) chain unrelated claims, and `_dominant_axis()` picked the first enum axis. Both clusterers now use a deterministic complete-link cohesion rule with sorted input, record `grouping_note`/`cohesion_min_similarity`, and opinion-axis dominance is decided by actual role counts with deterministic ties.
-7. **Misleading evidence-coordinate field (P1-B)** - group-level `evidence_coordinates` contained evidence ID strings. Now a real array of coordinate objects (`evidence_id`, `video_id`, `timestamp_start`, `timestamp_end`, `time_ref`, `speaker`, `speaker_confidence`, `modality`), enforced by a strict schema (`additionalProperties: false`, non-empty IDs, unique IDs, `minItems`).
-8. **Unsafe `clean` command (P1-F)** - arbitrary paths could be `rmtree`'d. Now repository-bound and fail-closed (root/home/repo-root/parent/outside/symlink-escape refused), with `--dry-run` and `--force` for non-generated paths.
-9. **Leak-scan extension gaps + untracked denylist enforcement (P1-G)** - now prefers `git ls-files -z`, scans all text-decodable tracked files (including `.env*`, `.sh`, `.ini`, `.cfg`, `.jsonl`, `.html`, extensionless), fails if local denylist files are tracked, and never skips a file merely because UTF-8 decode fails (decode-with-replacement + NUL-byte binary filter).
-10. **Fixtures absent from wheel / `_repo_root()` source-checkout assumption (P1-H)** - fixtures are packaged under `src/youtube_intel/_fixtures/`, resolved via `importlib.resources` with a source-checkout fallback; `doctor` reports `runtime_mode` (`source_checkout` / `installed_package` / `missing_resources`).
-11. **Hesitation word-count mismatch (P1-E)** - `word_count` was based on the raw input list while pause analysis used only timestamp-valid rows. Now validity/word count are based on normalized valid rows; malformed rows are tracked explicitly; negative/reversed/zero-duration/overlapping timestamps are rejected or reported; claims with insufficient valid timestamps are `insufficient_words`, never clean speech.
+## Newly Corrected Merge Blockers (from the independent review)
 
-## User-Visible Behavior Changes
-
-- `topic-demo`, `package`, `worth`, `handoff`, `hesitation-demo` now **fail closed** (exit 2, structured `{"ok": false, "error": "InvalidInputError", ...}`) on empty/malformed/inconsistent inputs.
-- `clean` refuses dangerous paths (filesystem root, home, repo root, outside-workspace, symlink escapes), requires `--force` for non-generated repo paths, and supports `--dry-run`.
-- `doctor` reports `runtime_mode`.
-- Demos work from an installed wheel.
-
-## Schema Changes
-
-- `topic_collection.schema.json`: `evidence_coordinates` is now `items: {$ref: evidenceCoordinate}`; new `evidenceCoordinate` definition (required fields, `additionalProperties: false`, `minLength: 1` IDs, `minItems: 1` modality); `evidence_ids` unique; `claimIndexRecord` uses the coordinate ref; `disagreementRelation.relation_type` adds `opposing_stances_pair`.
+1. **Opinion-axis majority on the real build path** - `build_topic_collection()` now preserves role multiplicity as `support_role_counts` (role -> claim count); `_dominant_axis()` computes majority from those counts, so 1 supporting + 3 challenging selects `challenging`. End-to-end tests through `build_topic_collection()` cover majority, ties, and permutations.
+2. **Cue start/end provenance** - `assemble_segments_to_sentences()` parses structured `start`/`end` (seconds or `mm:ss`), keeps `time_ref` as the legacy start fallback, sets `span_start` = first valid cue start and `span_end` = final cue end (None when no end exists - no fabricated duration), and emits `source_cue_coordinates` per cue that survives ClaimCandidate, ResidualClaimPackage, VideoKnowledgeRecord, and TopicCollection claim/evidence records. `assemble_from_dicts()` propagates speaker/modality/source-hint with configurable keys.
+3. **Structured fail-closed input errors** - added `read_required_json` (missing/non-UTF-8/invalid JSON -> InvalidInputError) and segment/hesitation row validation, so 12 malformed-input CLI cases return exit 2 with structured JSON and no traceback.
+4. **No synthetic identity in the package command** - `package` now requires non-empty `video_id`, `title`, and `language` (explicit `und` escape hatch) from flags or file metadata; synthetic defaults remain only in demo commands.
+5. **Handoff structural + coherence validation** - `write_handoff_bundle()` validates residual-package and analysis-worth structure (schema version, identity, claims, duplicate claim ids) and mutual coherence (matching video id/title, resolving source-trace claim ids) before writing anything; complete handoff requires both artifacts and the manifest records `bundle_completeness: complete`.
+6. **Correct source-checkout detection** - `find_source_root()` walks ancestors for `pyproject.toml` + `src/youtube_intel`; `is_source_checkout()`/`is_installed_package()` are unambiguous, and fixture resolution uses the canonical `examples/` tree via an explicit `PACKAGED_TO_EXAMPLES` mapping in source mode.
+7. **Installed-wheel `clean` safety** - `clean` requires a detected source checkout and fails closed (exit 2) in a wheel; `--force` can never delete protected source dirs (`src`, `.git`, `tests`, `schemas`, `.github`, `docs`, `scripts`).
+8. **Topic input + evidence reference integrity** - non-dict rows are rejected (never silently filtered); claims require non-empty source/text and >=1 evidence id; evidence coordinates are cross-checked against `evidence_ids` and the referenced evidence record; `validate_topic_collection_document` validates built collections (group references, representative membership, counts, coordinates) and is enforced at build time and in the MCP facade.
+9. **Schema contract** - `minLength: 1`, `minItems: 1`, `uniqueItems`, `minimum: 1` counts, and `additionalProperties: false` on core objects (topic, status, evidence coordinate, claim/evidence index records).
+10. **`doctor` reflects actual health** - computes checks (runtime_resources, gitignore_safety, repository_safety_scripts) and exits 2 when resources or ignore rules are missing; installed mode marks repo-only checks `not_applicable`.
+11. **MCP runtime validation** - the TopicCollection facade validates loaded documents with the dependency-free validator; overlay server loads every overlay through `load_validated_operator_overlay` in summary/groups/group_detail/limitations.
+12. **Fixture source-of-truth** - explicit `PACKAGED_TO_EXAMPLES` mapping, no ambiguous basename flattening, byte-for-byte parity test, no tracked bytecode.
 
 ## Test Additions
 
-- `tests/test_sentence_assembly.py`, `tests/test_claim_provenance.py` (P0-A)
-- `tests/test_topic_input_immutability.py` (P0-B)
-- `tests/test_identifier_integrity.py` (P0-C)
-- `tests/test_fail_closed_inputs.py`, `tests/test_handoff_bundle.py`, hesitation CLI fail-closed tests (P0-D/P0-E)
-- `tests/test_clustering_determinism.py` (P1-A)
-- `tests/test_evidence_coordinates.py` (P1-B)
-- hesitation timestamp validation tests (P1-E)
-- `tests/test_clean_safety.py` (P1-F)
-- expanded `tests/test_public_release_leak_scan.py` (P1-G)
-- `tests/test_fixture_parity.py` (P1-H byte-for-byte sync + runtime mode)
-## Wheel-Install Verification
+End-to-end/CLI tests added for opinion-axis majority, cue timing provenance through every layer, 12 structured malformed-input cases, package identity contract, handoff validation (7 cases), source-checkout/runtime-mode detection, clean safety (15 cases incl. installed-wheel), doctor health (6 cases), 16 topic-integrity negatives, schema contract (10 cases), and MCP runtime validation (12 cases).
 
-Built `dist/youtube_intel_evidence_kit-0.1.0-py3-none-any.whl`, installed into a clean venv (`/tmp/youtube-intel-wheel-test`), and ran (all under `runtime_mode: installed_package`):
+## Exact Verification (latest)
 
-- `youtube-intel doctor` - ok, demos available
-- `youtube-intel topic-demo` - 6 groups, artifacts non-empty
-- `youtube-intel single-video-demo` - ok, `analysis_worth: yes`
-- `youtube-intel hesitation-demo` - ok, 4 claims / 3 candidates
+- `python -m pytest -W error -q -p no:cacheprovider` -> **342 passed, 0 warnings**
+- `python scripts/check_encoding.py` -> passed
+- `python scripts/public_release_leak_scan.py` -> PASSED
+- `python -m compileall -q src tests scripts` -> ok
+- `python -m youtube_mcp_handoff.smoke` -> PASSED
+- Wheel build -> 12 fixture entries, no tracked bytecode
+- Installed-wheel demos (doctor/topic-demo/single-video-demo/hesitation-demo) -> all `ok: true`, `runtime_mode: installed_package`
+- Installed-wheel `clean` -> exit 2, `ok: false`, target untouched
 
-## Security and Destructive-Operation Hardening
+## CI Jobs
 
-- `clean`: path resolution, boundary checks, symlink-escape rejection, dry-run, `--force` gate, structured refusal that deletes nothing.
-- Leak scan: tracked-file scanning, local denylist tracking failure, gitignore enforcement.
-- No runtime dependencies added; the deterministic core remains dependency-free.
+- `test (3.10)`, `test (3.12)` - source-mode tests, `-W error`, source-mode assertions, malformed CLI smoke
+- `wheel-install` - clean wheel build/install, demos, schema validation, installed-wheel `clean` refusal
+- Status on latest push: **pass (all 3)**
 
-## Before/After Examples
+## Deferred Work (not release blockers for this PR scope)
 
-**Before:** `youtube-intel topic-demo --topic-dir /tmp/empty` wrote a manifest with 0 groups and `ok: true`.
-**After:** structured `ok: false`, `InvalidInputError`, exit 2, no manifest written.
-
-**Before:** group `evidence_coordinates: ["e1", "e2"]`.
-**After:** `[{"evidence_id": "e1", "video_id": "...", "timestamp_start": ..., ...}]`.
-
-**Before:** single-video returned manifest != on-disk `handoff_manifest.json`.
-**After:** `json.loads(manifest_path.read_text()) == returned_manifest` (new regression test).
-
-## Known Remaining Limitations
-
-- The labeled orchard fixture score is an **in-domain regression measurement**, not a benchmark: the must-link labels encode semantic topic relatedness while the alpha clusterer uses lexical normalized similarity. The complete-link cohesion rule deliberately separates weakly bridged claims, so the fixture score moved from 0.875 (single-link, bridge chaining) to ~0.625; `expected_groupings.json` ground truth is left untouched.
-- Korean normalized similarity runs lower than English (no space-delimited tokenization benefit); Korean grouping may require an explicit lower threshold.
-- P1-C (Korean high-risk marker false positives such as `용량` inside `사용량`) and P1-D (aside-detector corpus overfitting, e.g. ordinary price/product phrases flagged as hidden information) are **not fully remediated in this branch**. The Korean marker and aside detectors still use substring/denylist heuristics; a stronger-evidence rule (two independent markers or one unambiguous marker) and fixture-scaffold separation remain follow-up work.
-- The public MCP facility remains a read-only stdio facade, not a full MCP server.
+- **P1-C** Korean high-risk marker false positives (substring matching): tracked in **#3**.
+- **P1-D** aside-detector corpus overfitting: tracked in **#4**.
+Both remain heuristic/alpha and are clearly disclaimed; issues include user-visible impact and next steps.
 
 ## Relationship to PR #1
 
-PR #1 (`Add run-verified audit plus prototype-verified fix guide`) remains open and is referenced for its audit scope. This branch fixes the implementation defects that PR #1's documentation identified plus additional defects found during the work. PR #1 is intentionally **not** automatically closed; its documentation can be superseded/incorporated during review.
+PR #1 (run-verified audit documentation) remains open and is retained as **historical audit documentation**. This branch's implementation supersedes its prototype-fix guide with run-verified, tested fixes. PR #1 should be closed or explicitly superseded during review; PR #2 is the authoritative implementation.
 
-## Verification Commands
+## Remaining Limitations
 
-```bash
-python -m pytest -q -p no:cacheprovider        # 240 passed
-python scripts/check_encoding.py               # passed
-python scripts/public_release_leak_scan.py     # PASSED
-python -m compileall -q src tests scripts      # ok
-python -m youtube_mcp_handoff.smoke            # PASSED
-python -m build --wheel && inspect fixtures    # 12 fixture entries, no __pycache__
-```
+- The labeled orchard fixture score is an in-domain regression measurement (0.625 with complete-link vs 0.875 single-link); `expected_groupings.json` ground truth is untouched.
+- Korean grouping needs lower thresholds; the public MCP facility remains a read-only stdio facade.
+- This is **opinion-terrain evidence tooling, not truth verification**. Synthetic fixtures only for demos.
