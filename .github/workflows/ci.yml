@@ -163,7 +163,7 @@ jobs:
           test -d /tmp/wheel-clean-target
           python - <<'EOF'
           import json
-          payload = json.loads(open("/tmp/wheel-clean-out.json"))
+          payload = json.load(open("/tmp/wheel-clean-out.json"))
           assert payload["ok"] is False
           assert "source checkout" in payload["message"], payload
           print("installed-wheel clean refusal OK")
