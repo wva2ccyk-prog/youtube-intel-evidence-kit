@@ -165,11 +165,19 @@ def validate_handoff_inputs(
             for c in _as_list(package.get("claim_candidates"))
             if isinstance(c, dict)
         }
-        for trace_item in _as_list(worth.get("source_trace")):
-            if isinstance(trace_item, dict):
-                cid = _text(trace_item.get("claim_id"))
-                if cid and cid not in package_ids:
-                    issues.append(f"analysis_worth source_trace claim_id does not resolve: {cid!r}")
+        source_trace = _as_list(worth.get("source_trace"))
+        for i, trace_item in enumerate(source_trace):
+            if not isinstance(trace_item, dict):
+                issues.append(
+                    f"analysis_worth source_trace row {i} is not an object; "
+                    f"malformed source-trace rows cannot bypass claim resolution"
+                )
+                continue
+            cid = _text(trace_item.get("claim_id"))
+            if not cid:
+                issues.append(f"analysis_worth source_trace row {i} has an empty claim_id")
+            elif cid not in package_ids:
+                issues.append(f"analysis_worth source_trace claim_id does not resolve: {cid!r}")
     return issues
 
 

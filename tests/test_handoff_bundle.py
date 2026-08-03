@@ -180,3 +180,28 @@ def test_no_files_written_when_validation_fails(tmp_path: Path) -> None:
     with pytest.raises(InvalidInputError):
         write_handoff_bundle(tmp_path, package={"junk": True}, worth={"junk": True})
     assert list(tmp_path.iterdir()) == [], "no files may be written before validation succeeds"
+
+
+def test_source_trace_non_dict_row_cannot_bypass_validation(tmp_path) -> None:
+    worth = _real_worth()
+    worth["source_trace"] = ["not-a-dict"]
+    with pytest.raises(InvalidInputError, match="source_trace row 0 is not an object"):
+        write_handoff_bundle(tmp_path, package=_real_package(), worth=worth)
+
+
+def test_source_trace_empty_claim_id_row_cannot_bypass_validation(tmp_path) -> None:
+    worth = _real_worth()
+    worth["source_trace"] = [{"claim_id": "", "time_ref": "00:00", "evidence": "unclear", "confidence": "low"}]
+    with pytest.raises(InvalidInputError, match="source_trace row 0 has an empty claim_id"):
+        write_handoff_bundle(tmp_path, package=_real_package(), worth=worth)
+
+
+def test_source_trace_malformed_row_among_valid_ones_fails(tmp_path) -> None:
+    worth = _real_worth()
+    valid_ids = [c["claim_id"] for c in _real_package()["claim_candidates"]]
+    worth["source_trace"] = [
+        {"claim_id": valid_ids[0], "time_ref": "00:00", "evidence": "unclear", "confidence": "low"},
+        42,
+    ]
+    with pytest.raises(InvalidInputError, match="source_trace row 1 is not an object"):
+        write_handoff_bundle(tmp_path, package=_real_package(), worth=worth)
