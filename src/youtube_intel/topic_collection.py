@@ -1067,22 +1067,96 @@ def validate_topic_collection_document(collection: dict[str, Any]) -> list[str]:
         issues.append("claim_groups must be a non-empty list")
         groups = []
     issue_list = issues + _validate_topic_collection_groups(groups, claim_index, evidence_index)
-
-    # Only run the evidence-owner check when both indexes resolved as objects.
-    if isinstance(evidence_index, dict) and evidence_index:
-        source_video_ids = {
-            _text(v.get("video_id"))
-            for v in _as_list(collection.get("source_videos"))
-            if isinstance(v, dict)
-        }
-        for eid, ev in evidence_index.items():
-            if not isinstance(ev, dict):
-                issue_list.append(f"evidence_index[{eid!r}] is not an object")
-                continue
-            owner = _text(ev.get("video_id"))
-            if owner and source_video_ids and owner not in source_video_ids:
-                issue_list.append(f"evidence {eid!r}: video_id {owner!r} does not resolve to source_videos")
+    issue_list += _validate_topic_collection_index_integrity(
+        collection, claim_index, evidence_index, groups
+    )
     return issue_list
+
+
+def _validate_topic_collection_index_integrity(
+    collection: dict[str, Any],
+    claim_index: dict[Any, Any],
+    evidence_index: dict[Any, Any],
+    groups: list[Any],
+) -> list[str]:
+    """Structural validation of claim_index/evidence_index records and count /
+    coverage consistency (claim/evidence records must be valid objects with
+    resolving references; every claim must belong to a group; declared video
+    record count must agree with source_videos)."""
+    issues: list[str] = []
+
+    declared_video_count = collection.get("video_record_count")
+    source_videos = _as_list(collection.get("source_videos"))
+    if isinstance(declared_video_count, int) and declared_video_count != len(source_videos):
+        issues.append(f"video_record_count {declared_video_count} != source_videos {len(source_videos)}")
+
+    source_video_ids = {
+        _text(v.get("video_id"))
+        for v in source_videos
+        if isinstance(v, dict)
+    }
+
+    for uid, claim in (claim_index or {}).items():
+        if not isinstance(claim, dict):
+            issues.append(f"claim_index[{uid!r}] is not an object")
+            continue
+        if not _text(claim.get("claim_uid")):
+            issues.append(f"claim_index[{uid!r}]: claim_uid is empty")
+        source = _text(claim.get("source_video_id"))
+        if not source:
+            issues.append(f"claim_index[{uid!r}]: source_video_id is empty")
+        elif source_video_ids and source not in source_video_ids:
+            issues.append(f"claim_index[{uid!r}]: source_video_id {source!r} does not resolve to source_videos")
+        if not _as_list(claim.get("evidence_ids")):
+            issues.append(f"claim_index[{uid!r}]: no evidence ids")
+        coord = claim.get("evidence_coordinate")
+        if not isinstance(coord, dict):
+            issues.append(f"claim_index[{uid!r}]: missing evidence_coordinate")
+        else:
+            cid = _text(coord.get("evidence_id"))
+            if not cid:
+                issues.append(f"claim_index[{uid!r}]: evidence_coordinate has no evidence_id")
+            elif cid not in _as_list(claim.get("evidence_ids")):
+                issues.append(f"claim_index[{uid!r}]: evidence_coordinate.evidence_id not in evidence_ids")
+            elif cid not in evidence_index:
+                issues.append(f"claim_index[{uid!r}]: evidence_coordinate.evidence_id dangles")
+            elif isinstance(evidence_index.get(cid), dict):
+                ref = evidence_index[cid]
+                if _text(claim.get("source_video_id")) and _text(coord.get("video_id")) != _text(ref.get("video_id")):
+                    issues.append(f"claim_index[{uid!r}]: coordinate video_id differs from evidence record")
+                if coord.get("timestamp_start") != ref.get("timestamp_start") or coord.get("timestamp_end") != ref.get("timestamp_end"):
+                    issues.append(f"claim_index[{uid!r}]: coordinate timestamps differ from evidence record")
+                if _text(coord.get("speaker")) != _text(ref.get("speaker")):
+                    issues.append(f"claim_index[{uid!r}]: coordinate speaker differs from evidence record")
+
+    for eid, ev in (evidence_index or {}).items():
+        if not isinstance(ev, dict):
+            issues.append(f"evidence_index[{eid!r}] is not an object")
+            continue
+        if not _text(ev.get("evidence_id")):
+            issues.append(f"evidence_index[{eid!r}]: evidence_id is empty")
+        owner = _text(ev.get("video_id"))
+        if not owner:
+            issues.append(f"evidence_index[{eid!r}]: video_id is empty")
+        elif source_video_ids and owner not in source_video_ids:
+            issues.append(f"evidence_index[{eid!r}]: video_id {owner!r} does not resolve to source_videos")
+        modality = _as_list(ev.get("modality"))
+        if not modality or not all(isinstance(m, str) and m.strip() for m in modality):
+            issues.append(f"evidence_index[{eid!r}]: modality is empty or contains invalid entries")
+
+    # Coverage: every indexed claim must appear in at least one claim group.
+    grouped_uids = {
+        _text(u)
+        for g in groups
+        if isinstance(g, dict)
+        for u in _as_list(g.get("member_claim_uids"))
+    }
+    if grouped_uids:
+        for uid in (claim_index or {}):
+            if uid not in grouped_uids:
+                issues.append(f"claim_index uid is not covered by any claim group: {uid!r}")
+
+    return issues
 
 
 def _validate_topic_collection_groups(groups: list[Any], claim_index: dict, evidence_index: dict) -> list[str]:

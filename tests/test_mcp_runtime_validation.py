@@ -148,3 +148,38 @@ def test_invalid_policy_flags_rejected(tmp_path) -> None:
     def mutate(o):
         o["policy"]["truth_ranking_performed"] = True  # must be False
     _expect_public_tool_rejection(tmp_path, mutate)
+
+
+def test_topic_mcp_rejects_claim_with_empty_source_video(tmp_path) -> None:
+    from youtube_intel.topic_collection import validate_topic_collection_document
+    c = _build_valid_collection(tmp_path)
+    uid = next(iter(c["claim_index"]))
+    c["claim_index"][uid]["source_video_id"] = ""
+    assert any("source_video_id is empty" in i for i in validate_topic_collection_document(c))
+
+
+def test_topic_mcp_rejects_evidence_with_empty_video_id(tmp_path) -> None:
+    from youtube_intel.topic_collection import validate_topic_collection_document
+    c = _build_valid_collection(tmp_path)
+    eid = next(iter(c["evidence_index"]))
+    c["evidence_index"][eid]["video_id"] = ""
+    assert any("video_id is empty" in i for i in validate_topic_collection_document(c))
+
+
+def test_topic_mcp_rejects_claim_index_uid_not_covered_by_group(tmp_path) -> None:
+    from youtube_intel.topic_collection import validate_topic_collection_document
+    c = _build_valid_collection(tmp_path)
+    uid = next(iter(c["claim_index"]))
+    # Remove the uid from every group's member list and group ids.
+    for g in c["claim_groups"]:
+        g["claim_uids"] = [u for u in g["claim_uids"] if u != uid]
+        g["member_claim_uids"] = [u for u in g["member_claim_uids"] if u != uid]
+    assert any("not covered by any claim group" in i for i in validate_topic_collection_document(c))
+
+
+def test_topic_mcp_rejects_claim_without_evidence_coordinate(tmp_path) -> None:
+    from youtube_intel.topic_collection import validate_topic_collection_document
+    c = _build_valid_collection(tmp_path)
+    uid = next(iter(c["claim_index"]))
+    del c["claim_index"][uid]["evidence_coordinate"]
+    assert any("missing evidence_coordinate" in i for i in validate_topic_collection_document(c))
