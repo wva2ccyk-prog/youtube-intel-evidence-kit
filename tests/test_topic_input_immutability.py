@@ -66,13 +66,17 @@ def test_input_record_hashes_describe_original_records():
 
 def test_consecutive_builds_do_not_contaminate_each_other():
     records = _records()
+    before = _serialized(records)
     first = build_topic_collection(records, topic_id="t", topic_title="T", clusterer="normalized")
     second = build_topic_collection(records, topic_id="t", topic_title="T", clusterer="normalized")
     assert first["claim_groups"] == second["claim_groups"]
     assert first["claim_index"] == second["claim_index"]
     assert first["provenance"]["input_record_hashes"] == second["provenance"]["input_record_hashes"]
-    # Inputs still pristine after both builds.
-    assert _serialized(records) == _serialized([_records()[0], _records()[1]])
+    # Inputs still pristine after both builds. Compare against the pre-build
+    # snapshot (not a fresh _records() call): build_video_knowledge_record embeds
+    # a second-resolution created_at_utc, so two separate calls can straddle a
+    # second boundary and differ only in that volatile timestamp.
+    assert _serialized(records) == before
 
 
 def test_persisted_records_stay_stable_across_clusterer_choice(tmp_path: Path):
