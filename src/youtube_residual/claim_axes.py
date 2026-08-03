@@ -18,6 +18,7 @@ is Korean-dominant.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 # --- Content axis (what kind of claim) ----------------------------------------
 # Mirrors the web-derived youtube_knowledge_package schema claim_type enum.
@@ -158,6 +159,44 @@ _CONTENT_MARKERS: list[tuple[str, tuple[str, ...]]] = [
     )),
 ]
 
+# High-risk medical classification must not be triggered by substring
+# collisions such as "용량" inside "사용량", or by a generic capacity statement.
+# Ambiguous markers are admitted only as whole Korean terms and only when a
+# medical-domain context marker is present in the same text unit.
+_MEDICAL_ADVICE_AMBIGUOUS_MARKERS = {"용량"}
+_MEDICAL_CONTEXT_KOREAN = (
+    "복용", "처방", "투약", "약물", "의약품", "알약", "캡슐", "정제",
+    "환자", "의사", "의료진", "병원",
+)
+_MEDICAL_CONTEXT_ENGLISH = (
+    "medication", "medicine", "drug", "tablet", "capsule", "patient", "doctor",
+)
+_KOREAN_TERM_PARTICLES = (
+    "은", "는", "이", "가", "을", "를", "의", "도", "만", "과", "와",
+    "로", "으로", "에서", "에게", "께", "마다", "부터", "까지",
+)
+
+
+def _contains_korean_term(text: str, term: str) -> bool:
+    particles = "|".join(sorted(_KOREAN_TERM_PARTICLES, key=len, reverse=True))
+    pattern = rf"(?<![0-9A-Za-z가-힣]){re.escape(term)}(?:{particles})?(?![0-9A-Za-z가-힣])"
+    return re.search(pattern, text) is not None
+
+
+def _has_medical_context(text: str) -> bool:
+    lowered = text.lower()
+    return any(_contains_korean_term(text, marker) for marker in _MEDICAL_CONTEXT_KOREAN) or any(
+        marker in lowered for marker in _MEDICAL_CONTEXT_ENGLISH
+    )
+
+
+def _scan_medical_advice(text: str, markers: tuple[str, ...]) -> list[str]:
+    direct_markers = tuple(marker for marker in markers if marker not in _MEDICAL_ADVICE_AMBIGUOUS_MARKERS)
+    hits = _scan(text, direct_markers)
+    if _contains_korean_term(text, "용량") and _has_medical_context(text):
+        hits.append("용량")
+    return hits
+
 
 # Evidence-axis markers.
 _EXTERNAL_MARKERS = (
@@ -195,7 +234,7 @@ def classify_content_axis(text: str) -> tuple[str, list[str]]:
     best_markers: list[str] = []
     best_score = 0
     for ctype, markers in _CONTENT_MARKERS:
-        hits = _scan(text, markers)
+        hits = _scan_medical_advice(text, markers) if ctype == "medical_advice" else _scan(text, markers)
         if len(hits) > best_score:
             best_score = len(hits)
             best_type = ctype
