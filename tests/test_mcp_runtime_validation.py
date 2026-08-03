@@ -183,3 +183,172 @@ def test_topic_mcp_rejects_claim_without_evidence_coordinate(tmp_path) -> None:
     uid = next(iter(c["claim_index"]))
     del c["claim_index"][uid]["evidence_coordinate"]
     assert any("missing evidence_coordinate" in i for i in validate_topic_collection_document(c))
+
+
+# --- Third pass: dependency-free validator fail-closed on the public loader ---
+
+
+def _mutate_and_assert_rejected(tmp_path: Path, mutate) -> None:
+    from youtube_intel.topic_collection import validate_topic_collection_document
+    c = _build_valid_collection(tmp_path)
+    mutate(c)
+    assert validate_topic_collection_document(c), "expected rejection, got no issues"
+
+
+def _mutate_and_assert_loader_rejects(tmp_path: Path, mutate) -> None:
+    from youtube_intel.topic_mcp_facade import load_topic_collection
+    c = _build_valid_collection(tmp_path)
+    mutate(c)
+    f = tmp_path / "mutated.json"
+    f.write_text(json.dumps(c), encoding="utf-8")
+    with pytest.raises(InvalidInputError):
+        load_topic_collection(f)
+
+
+def test_mcp_rejects_wrong_schema_version(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(tmp_path, lambda c: c.update(schema_version="invalid"))
+
+
+def test_mcp_rejects_empty_topic_id(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(tmp_path, lambda c: c["topic"].update(topic_id="  "))
+
+
+def test_mcp_rejects_empty_topic_title(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(tmp_path, lambda c: c["topic"].update(title=""))
+
+
+def test_mcp_rejects_empty_source_videos(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(tmp_path, lambda c: c.update(source_videos=[]))
+
+
+def test_mcp_rejects_duplicate_source_video_ids(tmp_path) -> None:
+    def _dup(c):
+        c["source_videos"].append(dict(c["source_videos"][0]))
+    _mutate_and_assert_loader_rejects(tmp_path, _dup)
+
+
+def test_mcp_rejects_missing_video_record_count(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(tmp_path, lambda c: c.pop("video_record_count"))
+
+
+def test_mcp_rejects_non_integer_video_record_count(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(tmp_path, lambda c: c.update(video_record_count="2"))
+
+
+def test_mcp_rejects_video_count_mismatch(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(tmp_path, lambda c: c.update(video_record_count=99))
+
+
+def test_mcp_rejects_claim_index_key_uid_mismatch(tmp_path) -> None:
+    def _mutate(c):
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"]["other-key"] = c["claim_index"].pop(uid)
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_empty_claim_text(tmp_path) -> None:
+    def _mutate(c):
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"][uid]["text"] = " "
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_secondary_dangling_evidence_id(tmp_path) -> None:
+    def _mutate(c):
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"][uid]["evidence_ids"].append("ghost-secondary-evidence")
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_duplicate_claim_evidence_ids(tmp_path) -> None:
+    def _mutate(c):
+        uid = next(iter(c["claim_index"]))
+        eid = c["claim_index"][uid]["evidence_ids"][0]
+        c["claim_index"][uid]["evidence_ids"].append(eid)
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_evidence_index_key_id_mismatch(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"]["other-eid"] = c["evidence_index"].pop(eid)
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_coordinate_time_ref_mismatch(tmp_path) -> None:
+    def _mutate(c):
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"][uid]["evidence_coordinate"]["time_ref"] = "99:99"
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_coordinate_speaker_confidence_mismatch(tmp_path) -> None:
+    def _mutate(c):
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"][uid]["evidence_coordinate"]["speaker_confidence"] = "medium"
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_coordinate_modality_mismatch(tmp_path) -> None:
+    def _mutate(c):
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"][uid]["evidence_coordinate"]["modality"] = ["ocr"]
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_claim_member_arrays_mismatch(tmp_path) -> None:
+    def _mutate(c):
+        g = c["claim_groups"][0]
+        g["member_claim_uids"] = [g["claim_uids"][0], "extra-fake"]
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_empty_group_evidence_ids(tmp_path) -> None:
+    def _mutate(c):
+        c["claim_groups"][0]["evidence_ids"] = []
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_empty_group_evidence_coordinates(tmp_path) -> None:
+    def _mutate(c):
+        c["claim_groups"][0]["evidence_coordinates"] = []
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_evidence_id_without_group_coordinate(tmp_path) -> None:
+    def _mutate(c):
+        g = c["claim_groups"][0]
+        g["evidence_ids"].append("extra-evidence-no-coord")
+        c["evidence_index"]["extra-evidence-no-coord"] = dict(c["evidence_index"][next(iter(c["evidence_index"]))])
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_group_coordinate_with_unlisted_evidence_id(tmp_path) -> None:
+    def _mutate(c):
+        g = c["claim_groups"][0]
+        g["evidence_coordinates"].append(dict(g["evidence_coordinates"][0]))
+        g["evidence_coordinates"][-1]["evidence_id"] = "unlisted-coord"
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_terrain_dangling_group_id(tmp_path) -> None:
+    def _mutate(c):
+        c["terrain"]["repeated_claim_group_ids"].append("ghost-group")
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_disagreement_dangling_group_id(tmp_path) -> None:
+    def _mutate(c):
+        c["terrain"]["disagreement_relations"].append({"relation_id": "R1", "claim_group_id": "ghost-group", "claim_uids": []})
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_outlier_dangling_group_id(tmp_path) -> None:
+    def _mutate(c):
+        c["terrain"]["outlier_details"].append({"claim_group_id": "ghost-group", "claim_uids": []})
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_accepts_valid_generated_collection_still(tmp_path) -> None:
+    from youtube_intel.topic_collection import validate_topic_collection_document
+    assert validate_topic_collection_document(_build_valid_collection(tmp_path)) == []
