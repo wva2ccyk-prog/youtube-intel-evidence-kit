@@ -208,3 +208,131 @@ def test_valid_user_topic_directory_succeeds(tmp_path) -> None:
     assert r.returncode == 0, r.stderr
     manifest = json.loads((out / "topic_handoff_manifest.json").read_text(encoding="utf-8"))
     assert manifest["ok"] is True
+
+
+# --- Third pass: strict expected_groupings.json validation --------------------
+
+
+def _topic_with_expected(tmp_path: Path, expected) -> Path:
+    d = _topic_dir(tmp_path, [
+        ("video_a.json", _src(_valid_video(), _seg())),
+        ("expected_groupings.json", expected),
+    ])
+    return d
+
+
+def test_threshold_is_string(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": "not-a-number"})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "threshold" in payload["message"]
+
+
+def test_threshold_is_null(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": None})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_threshold_is_bool(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": True})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_threshold_below_zero(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": -0.1})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_threshold_above_one(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": 1.1})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_threshold_nan(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": float("nan")})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_threshold_infinity(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": float("inf")})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_must_link_scalar(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": "nope"})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_must_link_row_not_list(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": ["a-b-c"]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_must_link_row_one_item(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [["only-one"]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_must_link_row_three_items(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [["a", "b", "c"]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_must_link_row_empty_string(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [["valid", "   "]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_must_link_row_non_string(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"must_link": [["valid", 42]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_cannot_link_scalar(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"cannot_link": 7})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    _assert_failure(r, out)
+
+
+def test_cannot_link_malformed_row(tmp_path) -> None:
+    out = tmp_path / "out"
+    d = _topic_with_expected(tmp_path, {"cannot_link": [["ok"]]})
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    payload = _assert_failure(r, out)
+    assert "cannot_link" in payload["message"]
+
+
+def test_valid_expected_groupings_succeed(tmp_path) -> None:
+    d = _topic_with_expected(tmp_path, {"must_link": [], "threshold": 0.5})
+    out = tmp_path / "out"
+    r = _run_cli("topic-demo", "--topic-dir", str(d), "--out", str(out))
+    assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+    assert (out / "topic_collection.json").exists()
+    assert (out / "topic_handoff_manifest.json").exists()
+    assert (out / "grouping_evaluation.json").exists()

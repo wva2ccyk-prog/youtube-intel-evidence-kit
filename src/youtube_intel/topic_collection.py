@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import math
+
 import re
 from typing import Any
 
@@ -1586,6 +1588,56 @@ def build_topic_collection(
     return topic_collection
 
 
+def validate_expected_groupings_document(data: Any, *, label: str = "expected groupings") -> list[str]:
+    """Validate a user-supplied expected_groupings.json document.
+
+    Enforces a strict fail-closed contract so the evaluator never receives
+    malformed input: ``must_link`` / ``cannot_link`` are strict lists of exact
+    two-item lists of non-empty strings, and ``threshold`` (when present) must
+    be a finite numeric value within ``[0, 1]``. Booleans are rejected;
+    NaN/Infinity are rejected via ``math.isfinite``; strings are never coerced
+    through ``float()`` during evaluation.
+    """
+    issues: list[str] = []
+    if not isinstance(data, dict):
+        return [f"{label} must be an object"]
+
+    def check_pairs(key: str) -> None:
+        value = data.get(key)
+        if value is None:
+            return
+        if not isinstance(value, list):
+            issues.append(f"{label}.{key} must be a list")
+            return
+        for i, row in enumerate(value):
+            if not isinstance(row, list) or len(row) != 2:
+                issues.append(f"{label}.{key}[{i}] must be a list of exactly two items")
+                continue
+            for j, item in enumerate(row):
+                if not isinstance(item, str) or not item.strip():
+                    issues.append(f"{label}.{key}[{i}][{j}] must be a non-empty string")
+
+    check_pairs("must_link")
+    check_pairs("cannot_link")
+
+    threshold = data.get("threshold") if "threshold" in data else None
+    if "threshold" in data:
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            issues.append(f"{label}.threshold must be a numeric value")
+        elif not math.isfinite(threshold):
+            issues.append(f"{label}.threshold must be finite (NaN/Infinity rejected)")
+        elif not (0.0 <= threshold <= 1.0):
+            issues.append(f"{label}.threshold must satisfy 0 <= threshold <= 1")
+    return issues
+
+
+def assert_valid_expected_groupings_document(data: Any, *, label: str) -> dict[str, Any]:
+    issues = validate_expected_groupings_document(data, label=label)
+    if issues:
+        raise InvalidInputError(label + ": " + "; ".join(issues[:8]))
+    return data
+
+
 def evaluate_topic_collection(collection: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
     """Score TopicCollection grouping against a small labeled fixture contract.
 
@@ -1652,7 +1704,7 @@ def evaluate_topic_collection(collection: dict[str, Any], expected: dict[str, An
         "total": total,
         "score": score,
         "threshold": expected.get("threshold", 0.75),
-        "status": "pass" if total and score >= float(expected.get("threshold", 0.75)) else "fail",
+        "status": "pass" if total and score >= expected.get("threshold", 0.75) else "fail",
         "checks": checks,
     }
 
@@ -1981,13 +2033,9 @@ def build_topic_demo_from_segments(
     expected_path = topic_dir / "expected_groupings.json"
     if expected_path.exists():
         expected_data = read_required_json(expected_path, label="expected groupings")
-        if not isinstance(expected_data, dict):
-            raise InvalidInputError(
-                f"expected groupings {expected_path} must be an object (got {type(expected_data).__name__})"
-            )
-        must_link = expected_data.get("must_link")
-        if not isinstance(must_link, list):
-            raise InvalidInputError(f"expected groupings {expected_path}: must_link must be a list")
+        expected_data = assert_valid_expected_groupings_document(
+            expected_data, label=f"expected groupings {expected_path}"
+        )
         collection["grouping_evaluation"] = evaluate_topic_collection(collection, expected_data)
 
     # Phase 3: write artifacts only after every source is validated.
