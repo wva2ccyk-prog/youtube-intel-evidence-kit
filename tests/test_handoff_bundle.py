@@ -337,6 +337,8 @@ def test_handoff_invalid_time_ref_type(tmp_path) -> None:
 
 
 def test_handoff_trace_time_mismatch(tmp_path) -> None:
+    # Source claim has no time_ref; a trace row adding an arbitrary timestamp
+    # invents a coordinate absent from the source claim and must fail.
     worth = _real_worth()
     trace = _trace_good()
     trace[0]["time_ref"] = "01:30"
@@ -344,7 +346,8 @@ def test_handoff_trace_time_mismatch(tmp_path) -> None:
     package, wfile = _full_cli_inputs(tmp_path, worth=worth)
     out = tmp_path / "out"
     r = _run_handoff_cli(tmp_path, package, wfile, out)
-    assert r.returncode == 0, f"stdout={r.stdout} stderr={r.stderr}"
+    payload = _assert_handoff_cli_failure(r, out)
+    assert "invents a time_ref absent from the source claim" in payload["message"]
 
 
 def test_handoff_missing_evidence_field(tmp_path) -> None:
@@ -428,3 +431,67 @@ def test_handoff_trace_evidence_mismatch_with_source_claim(tmp_path) -> None:
     r = _run_handoff_cli(tmp_path, package_path, worth_path, out)
     payload = _assert_handoff_cli_failure(r, out)
     assert "does not match source claim" in payload["message"]
+
+
+# --- Fourth pass (Section 4): exact handoff source-trace timestamp coherence ---
+
+
+@pytest.mark.parametrize("source_time, trace_time, trace_has, expect_ok", [
+    (None, None, True, True),          # source None, trace None -> pass
+    (None, None, False, True),         # source None, trace omitted -> pass (None canonical)
+    (None, "01:30", True, False),      # source None, trace non-null -> fail (invented)
+    ("00:05", None, False, False),     # source present, trace omitted -> fail
+    ("00:05", None, True, False),      # source present, trace null -> fail
+    ("00:05", "00:06", True, False),   # source present, trace different -> fail
+    ("00:05", "00:05", True, True),    # source present, exact match -> pass
+    ("00:05", ["00:05"], True, False),  # source present, trace list -> fail
+    ("00:05", 123, True, False),       # source present, trace number -> fail
+    ("00:05", True, True, False),      # source present, trace bool -> fail
+])
+def test_handoff_timestamp_coherence_matrix(tmp_path, source_time, trace_time, trace_has, expect_ok) -> None:
+    pkg = _real_package()
+    pkg["claim_candidates"][0]["time_ref"] = source_time if source_time is not None else None
+    # ensure the claim dict has the key (None or value)
+    worth = _real_worth()
+    trace = _trace_good()
+    if trace_has:
+        trace[0]["time_ref"] = trace_time
+    else:
+        trace[0].pop("time_ref", None)
+    worth["source_trace"] = trace
+    package_path = tmp_path / "pkg.json"
+    package_path.write_text(json.dumps(pkg), encoding="utf-8")
+    worth_path = tmp_path / "worth.json"
+    worth_path.write_text(json.dumps(worth), encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run_handoff_cli(tmp_path, package_path, worth_path, out)
+    if expect_ok:
+        assert r.returncode == 0, f"expected ok: {r.stdout} {r.stderr}"
+        assert (out / "handoff_manifest.json").exists()
+    else:
+        assert r.returncode == 2, f"expected fail: {r.stdout} {r.stderr}"
+        assert "Traceback" not in r.stderr
+        payload = json.loads(r.stdout)
+        assert payload["ok"] is False and payload["error"] == "InvalidInputError"
+        assert not (out / "handoff_manifest.json").exists()
+
+
+def test_validate_handoff_inputs_invented_timestamp_unit() -> None:
+    from youtube_intel.reporting import validate_handoff_inputs
+    pkg = _real_package()
+    pkg["claim_candidates"][0]["time_ref"] = None
+    worth = _real_worth()
+    worth["source_trace"][0]["time_ref"] = "01:30"
+    issues = validate_handoff_inputs(package=pkg, worth=worth)
+    assert any("invents a time_ref" in i for i in issues)
+
+
+def test_validate_handoff_inputs_missing_trace_time_ref_when_source_present() -> None:
+    from youtube_intel.reporting import validate_handoff_inputs
+    pkg = _real_package()
+    pkg["claim_candidates"][0]["time_ref"] = "00:05"
+    worth = _real_worth()
+    worth["source_trace"][0].pop("time_ref", None)
+    issues = validate_handoff_inputs(package=pkg, worth=worth)
+    assert any("is missing time_ref" in i for i in issues)
+

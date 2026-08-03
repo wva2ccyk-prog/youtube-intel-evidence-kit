@@ -168,10 +168,24 @@ def validate_handoff_inputs(
             source_claim = package_claims[cid]
             trace_time = trace_item.get("time_ref")
             source_time = source_claim.get("time_ref")
-            if trace_time is not None and not isinstance(trace_time, str):
-                issues.append(f"source_trace row {i} time_ref must be a string or null")
-            if source_time and trace_time != source_time:
-                issues.append(f"source_trace row {i} time_ref does not match source claim")
+            trace_has_time = "time_ref" in trace_item
+            # Exact source-trace timestamp coherence: a trace row may never
+            # invent a timestamp absent from the source claim, and when the
+            # source claim has a timestamp the trace must match it exactly.
+            if source_time is None:
+                if trace_has_time and trace_time is not None:
+                    issues.append(
+                        f"source_trace row {i} invents a time_ref absent from the source claim"
+                    )
+            else:
+                if not trace_has_time:
+                    issues.append(f"source_trace row {i} is missing time_ref")
+                elif not isinstance(trace_time, str):
+                    issues.append(f"source_trace row {i} time_ref must be a string")
+                elif trace_time != source_time:
+                    issues.append(
+                        f"source_trace row {i} time_ref does not match source claim"
+                    )
             # Whole-trace coherence: contradicting claim_type/content_type is
             # reported rather than silently accepted.
             source_type = source_claim.get("content_type")
