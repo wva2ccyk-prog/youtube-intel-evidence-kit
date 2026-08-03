@@ -5,6 +5,11 @@ from typing import Any
 
 from .errors import InvalidInputError
 from .io_utils import read_json, write_json, write_text
+from .package_validation import (
+    RESERVED_FALLBACK_IDS,
+    PACKAGE_SCHEMA_VERSION,
+    validate_residual_package_dict,
+)
 
 
 PUBLIC_LIMITATIONS = [
@@ -24,60 +29,9 @@ def _text(value: Any, default: str = "") -> str:
     return str(value if value not in (None, "") else default)
 
 
-RESERVED_FALLBACK_IDS = {"unknown-video", "unknown-evidence", "unknown-claim", "unknown-group"}
-PACKAGE_SCHEMA_VERSION = "youtube_residual_v0.1"
 ANALYSIS_WORTH_SCHEMA_VERSION = "youtube_analysis_worth_v0.1"
 VALID_ANALYSIS_WORTH_VALUES = {"yes", "no", "maybe"}
 
-
-def validate_residual_package_dict(package: dict[str, Any]) -> list[str]:
-    """Return structural issues for a residual package dictionary.
-
-    A handoff bundle must not report success for an arbitrary object: the
-    package must carry the expected schema version, a non-empty video identity,
-    at least one claim candidate, and every claim must be an object with a
-    non-empty claim id and text (duplicates rejected).
-    """
-    issues: list[str] = []
-    if not isinstance(package, dict):
-        return ["package_not_object"]
-    if package.get("schema_version") != PACKAGE_SCHEMA_VERSION:
-        issues.append(
-            f"package schema_version mismatch: expected {PACKAGE_SCHEMA_VERSION!r}, "
-            f"got {_text(package.get('schema_version'), '<missing>')!r}"
-        )
-    video = package.get("video")
-    if not isinstance(video, dict) or not video:
-        issues.append("package.video is missing or empty")
-    else:
-        video_id = _text(video.get("video_id"))
-        title = _text(video.get("title"))
-        if not video_id:
-            issues.append("package.video.video_id is empty")
-        elif video_id in RESERVED_FALLBACK_IDS:
-            issues.append(f"package.video.video_id uses reserved fallback id: {video_id!r}")
-        if not title:
-            issues.append("package.video.title is empty")
-    claims = package.get("claim_candidates")
-    if not isinstance(claims, list) or not claims:
-        issues.append("package.claim_candidates is empty or not a list")
-        return issues
-    seen_ids: set[str] = set()
-    for i, claim in enumerate(claims):
-        if not isinstance(claim, dict):
-            issues.append(f"package.claim_candidates[{i}] is not an object")
-            continue
-        cid = _text(claim.get("claim_id"))
-        text = _text(claim.get("text"))
-        if not cid:
-            issues.append(f"package.claim_candidates[{i}] has empty claim_id")
-        elif cid in seen_ids:
-            issues.append(f"duplicate claim_id in package: {cid!r}")
-        else:
-            seen_ids.add(cid)
-        if not text:
-            issues.append(f"package.claim_candidates[{i}] has empty text")
-    return issues
 
 
 def validate_analysis_worth_dict(worth: dict[str, Any]) -> list[str]:

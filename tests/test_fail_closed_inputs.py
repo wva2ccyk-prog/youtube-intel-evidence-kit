@@ -154,7 +154,7 @@ def test_worth_empty_package_fails_closed(tmp_path, capsys) -> None:
     rc, payload = _run("worth", "--package", str(package), "--out", str(tmp_path / "out"), capsys=capsys)
     assert rc == 2
     assert payload["ok"] is False
-    assert "non-empty residual package" in payload["message"]
+    assert "not a valid residual package" in payload["message"]
     assert not (tmp_path / "out" / "analysis_worth.json").exists()
 
 
