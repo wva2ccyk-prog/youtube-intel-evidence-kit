@@ -1,33 +1,32 @@
-# Global Audit Remediation + Independent-Review Corrective Pass
+# Global Audit Remediation + Two Independent-Review Corrective Passes
 
 ## Summary
 
-Code-level remediation of the global audit findings, **plus a corrective pass addressing every merge-blocking defect found in the independent review** of PR #2. This is not a documentation-only change: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries were fixed and are enforced by regression tests, CI, and a live PR description that matches the implementation.
+Code-level remediation of the global audit findings, plus **two independent-review corrective passes** addressing every merge-blocking defect found in the reviews. This is not a documentation-only change: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries were fixed and are enforced by regression tests, CI, and a live PR description that matches the implementation.
 
-**Not merged.** Draft opened and returned to ready-for-review only after all checks pass.
+**Not merged.** Returned to ready-for-review only after all checks pass.
 
-## Newly Corrected Merge Blockers (from the independent review)
+## Second Corrective Pass: Merge-Blocking Defects Fixed
 
-1. **Opinion-axis majority on the real build path** - `build_topic_collection()` now preserves role multiplicity as `support_role_counts` (role -> claim count); `_dominant_axis()` computes majority from those counts, so 1 supporting + 3 challenging selects `challenging`. End-to-end tests through `build_topic_collection()` cover majority, ties, and permutations.
-2. **Cue start/end provenance** - `assemble_segments_to_sentences()` parses structured `start`/`end` (seconds or `mm:ss`), keeps `time_ref` as the legacy start fallback, sets `span_start` = first valid cue start and `span_end` = final cue end (None when no end exists - no fabricated duration), and emits `source_cue_coordinates` per cue that survives ClaimCandidate, ResidualClaimPackage, VideoKnowledgeRecord, and TopicCollection claim/evidence records. `assemble_from_dicts()` propagates speaker/modality/source-hint with configurable keys.
-3. **Structured fail-closed input errors** - added `read_required_json` (missing/non-UTF-8/invalid JSON -> InvalidInputError) and segment/hesitation row validation, so 12 malformed-input CLI cases return exit 2 with structured JSON and no traceback.
-4. **No synthetic identity in the package command** - `package` now requires non-empty `video_id`, `title`, and `language` (explicit `und` escape hatch) from flags or file metadata; synthetic defaults remain only in demo commands.
-5. **Handoff structural + coherence validation** - `write_handoff_bundle()` validates residual-package and analysis-worth structure (schema version, identity, claims, duplicate claim ids) and mutual coherence (matching video id/title, resolving source-trace claim ids) before writing anything; complete handoff requires both artifacts and the manifest records `bundle_completeness: complete`.
-6. **Correct source-checkout detection** - `find_source_root()` walks ancestors for `pyproject.toml` + `src/youtube_intel`; `is_source_checkout()`/`is_installed_package()` are unambiguous, and fixture resolution uses the canonical `examples/` tree via an explicit `PACKAGED_TO_EXAMPLES` mapping in source mode.
-7. **Installed-wheel `clean` safety** - `clean` requires a detected source checkout and fails closed (exit 2) in a wheel; `--force` can never delete protected source dirs (`src`, `.git`, `tests`, `schemas`, `.github`, `docs`, `scripts`).
-8. **Topic input + evidence reference integrity** - non-dict rows are rejected (never silently filtered); claims require non-empty source/text and >=1 evidence id; evidence coordinates are cross-checked against `evidence_ids` and the referenced evidence record; `validate_topic_collection_document` validates built collections (group references, representative membership, counts, coordinates) and is enforced at build time and in the MCP facade.
-9. **Schema contract** - `minLength: 1`, `minItems: 1`, `uniqueItems`, `minimum: 1` counts, and `additionalProperties: false` on core objects (topic, status, evidence coordinate, claim/evidence index records).
-10. **`doctor` reflects actual health** - computes checks (runtime_resources, gitignore_safety, repository_safety_scripts) and exits 2 when resources or ignore rules are missing; installed mode marks repo-only checks `not_applicable`.
-11. **MCP runtime validation** - the TopicCollection facade validates loaded documents with the dependency-free validator; overlay server loads every overlay through `load_validated_operator_overlay` in summary/groups/group_detail/limitations.
-12. **Fixture source-of-truth** - explicit `PACKAGED_TO_EXAMPLES` mapping, no ambiguous basename flattening, byte-for-byte parity test, no tracked bytecode.
+1. **Representative evidence timestamps** - `_make_evidence_record()` now uses the real structured span (`span_start`/`span_end`) as `timestamp_start`/`timestamp_end` with full fractional precision (never rounded), falling back to `time_ref` only for legacy start and keeping end `None` when no real end exists. Values propagate identically into the claim record, `evidence_coordinate`, `evidence_index`, and group coordinates. Cross-layer equality is enforced by tests.
+2. **`worth` / `topic-demo` fully fail-closed** - `worth` now strictly validates the primary package, every compare package (indexed in errors, never silently ignored), and run-dir inputs (dir existence, `residual/package.json`, strict optional `metadata.json`). `topic-demo` strictly reads and validates every `video_*.json` (top-level object, video object, non-empty identity never fabricated from filename stems, non-empty segments, per-segment object with non-empty text) and validates `expected_groupings.json` before writing any artifact, so a malformed later source cannot leave a half-written output directory.
+3. **Dependency-free TopicCollection validator strengthened** - `validate_topic_collection_document()` now structurally validates claim_index/evidence_index records (non-empty ids, resolving references, coordinate-vs-evidence agreement), declared `video_record_count` consistency, and claim coverage by groups; the MCP facade inherits all of this.
+4. **`clean --force` no longer deletes arbitrary content** - only recognized generated-output locations are deletable; `--force` was removed from the CLI and never widens the deletion set, so non-generated and protected repository content cannot be removed.
+5. **Handoff `source_trace` validation cannot be bypassed** - every source-trace row must be an object with a non-empty claim_id that resolves to a package claim; malformed/empty rows are rejected with their index.
+6. **Source-checkout `topic-demo` resolves canonical `examples/topic_demo`** - `fixture_path()` now resolves directories (including `topic_demo`) to `examples/` in a source checkout instead of the packaged `_fixtures` copy, via the explicit `PACKAGED_TO_EXAMPLES` map.
 
-## Test Additions
+## Test Additions (second pass)
 
-End-to-end/CLI tests added for opinion-axis majority, cue timing provenance through every layer, 12 structured malformed-input cases, package identity contract, handoff validation (7 cases), source-checkout/runtime-mode detection, clean safety (15 cases incl. installed-wheel), doctor health (6 cases), 16 topic-integrity negatives, schema contract (10 cases), and MCP runtime validation (12 cases).
+- `test_representative_timestamps.py` (7): fractional/no-time-ref/legacy timestamps, cross-layer equality, no precision loss, source-checkout topic_demo resolution.
+- `test_worth_fail_closed.py` (18): all invalid-package, compare-package, run-dir, and metadata cases.
+- `test_topic_demo_fail_closed.py` (17): all malformed/empty/invalid source and expected-grouping cases, one-valid-one-invalid atomicity, success paths.
+- `test_clean_safety.py` (+2): non-generated content never deletable via CLI, even with `--force`.
+- `test_mcp_runtime_validation.py` (+4): empty source video, empty evidence video, uncovered claim, missing evidence_coordinate.
+- `test_handoff_bundle.py` (+3): non-dict/empty source-trace rows rejected.
 
 ## Exact Verification (latest)
 
-- `python -m pytest -W error -q -p no:cacheprovider` -> **343 passed, 0 warnings**
+- `python -m pytest -W error -q -p no:cacheprovider` -> **393 passed, 0 warnings**
 - `python scripts/check_encoding.py` -> passed
 - `python scripts/public_release_leak_scan.py` -> PASSED
 - `python -m compileall -q src tests scripts` -> ok
