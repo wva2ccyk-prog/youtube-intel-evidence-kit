@@ -179,18 +179,25 @@ def test_topic_demo_cli_cue_mode_preserves_fractional_timestamps(tmp_path: Path)
 
 
 def test_cue_mode_legacy_time_ref_only() -> None:
-    package = _package([{"text": "legacy cue", "time_ref": "00:12", "speaker": "A"}])
+    package = build_residual_package(
+        video_id="rv", title="RV", language="en",
+        segments=[{"text": "legacy cue", "time_ref": "00:12", "speaker": "A"}],
+    )
     claim = package.claim_candidates[0]
     assert claim.span_start == 12.0
     assert claim.span_end is None
-    record = _record([{"text": "legacy cue", "time_ref": "00:12", "speaker": "A"}])
+    record = build_video_knowledge_record(package.to_dict(), topic_id="t", topic_title="T")
     ev = record["evidence_records"][0]
     assert ev["timestamp_start"] == 12.0
     assert ev["timestamp_end"] is None
 
 
 def test_cue_mode_no_time_ref_structured_only() -> None:
-    record = _record([{"text": "structured only cue", "start": 5.5, "end": 6.25, "speaker": "A"}])
+    package = build_residual_package(
+        video_id="rv", title="RV", language="en",
+        segments=[{"text": "structured only cue", "start": 5.5, "end": 6.25, "speaker": "A"}],
+    )
+    record = build_video_knowledge_record(package.to_dict(), topic_id="t", topic_title="T")
     ev = record["evidence_records"][0]
     assert ev["timestamp_start"] == 5.5
     assert ev["timestamp_end"] == 6.25
