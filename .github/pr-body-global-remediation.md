@@ -1,10 +1,36 @@
-# Global Audit Remediation + Three Independent-Review Corrective Passes
+# Global Audit Remediation + Four Independent-Review Corrective Passes
 
 ## Summary
 
-Code-level remediation of the global audit findings, plus **three independent-review corrective passes** addressing every merge-blocking defect found in the reviews. Not documentation-only: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries are fixed and enforced by regression tests, CI, and this live PR description, which matches the implementation.
+Code-level remediation of the global audit findings, plus **four independent-review corrective passes** addressing every merge-blocking defect found in the reviews. Not documentation-only: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries are fixed and enforced by regression tests, CI, and this live PR description, which matches the implementation.
 
 **Not merged.** Returned to ready-for-review only after all checks pass.
+
+## Fourth Corrective Pass: Contract and Fail-Closed Defects Fixed
+
+1. **Exact handoff source-trace timestamp coherence** - the analysis-worth trace can no longer invent a `time_ref` absent from the source claim. When the source claim `time_ref` is `null`, a non-null trace timestamp is rejected; when the source has a timestamp, the trace must carry that exact string (missing, null, non-string, or different values are rejected). No truthiness is used for equality. Covered by public `handoff` CLI tests and `validate_handoff_inputs()` unit tests.
+2. **Strict shared structured timestamp parsing** - a single `parse_structured_timestamp()` helper is used by both cue and sentence modes. It rejects booleans, NaN/Infinity (numeric and string forms), negative seconds, malformed strings, and end-earlier-than-start; it preserves fractional precision without rounding. Structured `start`/`end` that are present but invalid always fail; legacy `time_ref` remains a start fallback only.
+3. **Non-string package CLI identities rejected** - the public `package` command no longer coerces `video_id`/`title`/`language` with `str()`. A shared `require_nonempty_string()` helper rejects non-string and whitespace-only identity values with `InvalidInputError`; valid Unicode and the explicit `"und"` language remain accepted.
+4. **Complete dependency-free TopicCollection contract** - the JSON Schema and the dependency-free runtime validator now agree on the required top-level contract (`video_record_count`/`claim_total` required, `minProperties: 1` on the indexes, `minimum: 0` on timestamps). Source-video rows must contain all documented required fields; evidence and coordinate timestamps/types are independently validated (so two matching invalid values cannot bypass validation); every claim belongs to exactly one group (ungrouped and multiply-grouped rejected); terrain lists/relations/outliers are strictly typed with coherent membership.
+5. **Expected-grouping evaluation is intrinsically fail-closed** - `evaluate_topic_collection()` now calls `assert_valid_expected_groupings_document()` up front, so malformed rows can never be silently skipped or produce a score from a reduced set. `must_link` is required (null rejected), unknown fields are rejected, and duplicate/reversed-duplicate/contradictory/same-item pairs are rejected. Covered at both the `topic-demo` file boundary and the direct library API.
+
+## Test Additions (fourth pass)
+
+- `test_expected_groupings_fail_closed.py` (19): missing/null `must_link`, malformed pairs, blank/non-string items, duplicate/reversed-duplicate/contradictory/same-item pairs, unknown fields, invalid thresholds, and direct `evaluate_topic_collection()`/`validate_expected_groupings_document()` rejection.
+- `test_topic_demo_fail_closed.py` (+8): missing/null `must_link`, duplicate/reversed/contradictory/same-item pairs, unknown fields, valid populated document.
+- `test_mcp_runtime_validation.py` (+24): missing source-video required fields, timestamp string/NaN/Infinity/bool/negative/reversed, numeric `time_ref`, invalid speaker/confidence, identical invalid values across evidence/claim/group coordinates, claim in two groups, malformed/missing terrain lists, duplicate terrain group id, duplicate relation id, relation/outlier claim outside its group, invalid limitations.
+- `test_evidence_coordinates.py` (+1): schema/runtime parity over a mutation corpus.
+
+## Exact Verification (latest)
+
+- `python -m pytest -W error -q -p no:cacheprovider` -> **578 passed, 0 warnings**
+- `python scripts/check_encoding.py` -> passed
+- `python scripts/public_release_leak_scan.py` -> PASSED
+- `python -m compileall -q src tests scripts` -> ok
+- `python -m youtube_mcp_handoff.smoke` -> PASSED
+- Wheel build -> 12 fixture entries, no tracked bytecode
+- Installed-wheel demos (doctor/topic-demo/single-video-demo/hesitation-demo) -> all `ok: true`, `runtime_mode: installed_package`
+- Installed-wheel `clean` -> exit 2, `ok: false`, target untouched
 
 ## Third Corrective Pass: Merge-Blocking Defects Fixed
 
@@ -22,22 +48,18 @@ Code-level remediation of the global audit findings, plus **three independent-re
 - `test_package_strict_strings.py` (17): whitespace-only and non-string identity/text values, reserved claim id, whitespace-normalized duplicates, valid unicode + `und`, through `worth` and `handoff` CLIs.
 - `test_handoff_bundle.py` (+13): missing/blank worth title, title mismatch, whitespace/duplicate trace claim ids, missing/invalid time_ref, missing/blank evidence and confidence, trace time/evidence/confidence mismatch with source claim, valid complete trace.
 
-## Exact Verification (latest)
-
-- `python -m pytest -W error -q -p no:cacheprovider` -> **472 passed, 0 warnings**
-- `python scripts/check_encoding.py` -> passed
-- `python scripts/public_release_leak_scan.py` -> PASSED
-- `python -m compileall -q src tests scripts` -> ok
-- `python -m youtube_mcp_handoff.smoke` -> PASSED
-- Wheel build -> 12 fixture entries, no tracked bytecode
-- Installed-wheel demos (doctor/topic-demo/single-video-demo/hesitation-demo) -> all `ok: true`, `runtime_mode: installed_package`
-- Installed-wheel `clean` -> exit 2, `ok: false`, target untouched
-
 ## CI Jobs
 
-- `test (3.10)`, `test (3.12)` - source-mode tests, `-W error`, source-mode assertions, extended malformed CLI smoke (cue-mode timestamps, worth strict strings, expected-grouping threshold, handoff trace, MCP validator)
+- `test (3.10)`, `test (3.12)` - source-mode tests, `-W error`, source-mode assertions, extended malformed CLI smoke (cue-mode timestamps, worth strict strings, expected-grouping threshold, handoff trace, MCP validator, handoff fabricated-timestamp rejection, package non-string identity rejection, boolean/NaN timestamp rejection, expected-groupings missing `must_link` rejection, MCP loader matching-invalid-coordinate / multi-group / missing-source-field rejection)
 - `wheel-install` - clean wheel build/install, demos, schema validation, installed-wheel `clean` refusal
 - Status on latest push: **pass (all 3)**
+
+## Pull Request Status
+
+- **PR #2 remains open and unmerged.**
+- **PR #1 was not modified or merged.**
+- No approval was self-issued; the branch is ready for another independent review.
+- The final head SHA and per-job conclusions are recorded in the live PR description after the CI run completes.
 
 ## Deferred Work (not release blockers for this PR scope)
 
