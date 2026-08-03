@@ -24,7 +24,7 @@ This is not meant for broad scraping, channel-wide monitoring, public truth cert
 
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
+. .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -e .[dev]
 youtube-intel doctor
 youtube-intel topic-demo --out outputs/topic_demo
@@ -63,6 +63,14 @@ python -m youtube_mcp_handoff.smoke
 python scripts/public_release_leak_scan.py
 ```
 
+The leak scan prefers Git-tracked files (`git ls-files -z`) and content-scans
+all text-decodable tracked files regardless of extension, including `.env*`,
+`.sh`, `.ini`, `.cfg`, `.jsonl`, `.html`, and extensionless config files.
+Local denylist files (`.release_private_denylist.local`,
+`private_denylist.local`) are gitignored and fail the scan if tracked. Clean
+generated artifacts first (`python scripts/clean_generated_artifacts.py`)
+because the scan rejects bytecode/cache artifacts.
+
 ## Main Commands
 
 | Command | Purpose |
@@ -76,7 +84,7 @@ python scripts/public_release_leak_scan.py
 | `youtube-intel single-video-handoff --package ... --analysis-worth ... --out outputs/handoff` | Build AI CLI handoff files for a single-video input-layer evidence packet |
 | `youtube-intel mcp-stdio` | Run the legacy read-only synthetic overlay MCP-style JSON-RPC stdio smoke server |
 | `youtube-intel topic-mcp-stdio --topic-collection outputs/topic_demo/topic_collection.json` | Run the read-only TopicCollection MCP-ready JSON-RPC stdio handoff facade |
-| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts |
+| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts (repository-bound and fail-closed; `--dry-run` to preview, `--force` for non-generated repo paths) |
 
 ## Operator Loop
 
