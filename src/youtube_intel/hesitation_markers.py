@@ -76,22 +76,90 @@ def strip_word_punctuation(word: Any) -> str:
     return str(word).strip(_PUNCT_CHARS)
 
 
+def _coerce_word_entry(word: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a normalized word entry or None when the timestamp is unusable.
+
+    Rejects missing, non-numeric, negative, reversed (``end < start``), and
+    zero-duration timestamps so downstream pause/span math only ever sees
+    physically possible timing data.
+    """
+    start = word.get("start")
+    end = word.get("end")
+    if start is None or end is None:
+        return None
+    try:
+        fs = float(start)
+        fe = float(end)
+    except (TypeError, ValueError):
+        return None
+    if fs < 0 or fe < 0:
+        return None
+    if fe < fs:
+        return None
+    if fe == fs:
+        return None
+    return {"word": str(word.get("word", "")), "start": fs, "end": fe}
+
+
 def _normalized_words(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Coerce and sort word entries by start time. Skips entries without times."""
-    out: list[dict[str, Any]] = []
-    for w in words or []:
-        start = w.get("start")
-        end = w.get("end")
-        if start is None or end is None:
-            continue
-        try:
-            fs = float(start)
-            fe = float(end)
-        except (TypeError, ValueError):
-            continue
-        out.append({"word": str(w.get("word", "")), "start": fs, "end": fe})
+    """Coerce and sort word entries by start time, keeping only valid rows."""
+    out = []
+    for word in words or []:
+        entry = _coerce_word_entry(word)
+        if entry is not None:
+            out.append(entry)
     out.sort(key=lambda x: (x["start"], x["end"]))
     return out
+
+
+def _normalize_words_detailed(
+    words: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return ``(valid, malformed, overlapping_pairs)`` with per-row reasons.
+
+    Malformed rows are tracked explicitly (missing/non-numeric/negative/
+    reversed/zero-duration timestamps) instead of silently vanishing, and
+    overlapping adjacent pairs (next word starts before the previous word
+    ends) are reported so the operator can spot impossible timing data.
+    """
+    valid: list[dict[str, Any]] = []
+    malformed: list[dict[str, Any]] = []
+    for idx, word in enumerate(words or []):
+        start = word.get("start")
+        end = word.get("end")
+        reason: str | None = None
+        fs = fe = 0.0
+        if start is None or end is None:
+            reason = "missing_timestamp"
+        else:
+            try:
+                fs = float(start)
+                fe = float(end)
+            except (TypeError, ValueError):
+                reason = "non_numeric_timestamp"
+            else:
+                if fs < 0 or fe < 0:
+                    reason = "negative_timestamp"
+                elif fe < fs:
+                    reason = "reversed_range"
+                elif fe == fs:
+                    reason = "zero_duration"
+        if reason is not None:
+            malformed.append({"index": idx, "word": str(word.get("word", "")), "reason": reason})
+        else:
+            valid.append({"word": str(word.get("word", "")), "start": fs, "end": fe, "index": idx})
+    valid.sort(key=lambda x: (x["start"], x["end"]))
+    overlapping_pairs: list[dict[str, Any]] = []
+    for i in range(len(valid) - 1):
+        if valid[i + 1]["start"] < valid[i]["end"]:
+            overlapping_pairs.append({
+                "left_index": valid[i]["index"],
+                "right_index": valid[i + 1]["index"],
+                "left_word": valid[i]["word"],
+                "right_word": valid[i + 1]["word"],
+                "overlap_seconds": round(valid[i]["end"] - valid[i + 1]["start"], 3),
+            })
+    return valid, malformed, overlapping_pairs
 
 
 def detect_pause_events(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -176,11 +244,19 @@ def analyze_claim_words(
     ``hesitation_score`` is ALWAYS ``None`` by design: this system does not
     convert markers into a confidence/truth score. Markers are listen-and-judge
     cues for the operator only.
+
+    Validity and ``word_count`` are based on the NORMALIZED, timestamp-valid
+    rows only; malformed rows (missing/non-numeric/negative/reversed/
+    zero-duration timestamps) are tracked explicitly in ``malformed_words``
+    instead of silently satisfying the minimum word count. A claim whose valid
+    rows fall below the minimum is marked ``insufficient_words``, never clean
+    speech.
     """
-    word_count = len(words or [])
-    pause_events = detect_pause_events(words)
-    filler_count = count_fillers(words)
-    restart_count = count_restarts(words)
+    valid_words, malformed_words, overlapping_pairs = _normalize_words_detailed(words)
+    word_count = len(valid_words)
+    pause_events = detect_pause_events(valid_words)
+    filler_count = count_fillers(valid_words)
+    restart_count = count_restarts(valid_words)
 
     if word_count < MIN_WORDS_FOR_MARKER:
         marker = MARKER_INSUFFICIENT
@@ -195,7 +271,10 @@ def analyze_claim_words(
         "span_start_s": round(float(span_start), 3) if span_start is not None else None,
         "span_end_s": round(float(span_end), 3) if span_end is not None else None,
         "word_count": word_count,
-        "speech_span_s": speech_span_seconds(words),
+        "malformed_word_count": len(malformed_words),
+        "malformed_words": malformed_words,
+        "overlapping_pairs": overlapping_pairs,
+        "speech_span_s": speech_span_seconds(valid_words),
         "pause_events": pause_events,
         "pause_count": len(pause_events),
         "filler_count": filler_count,

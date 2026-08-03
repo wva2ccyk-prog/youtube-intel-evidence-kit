@@ -150,6 +150,79 @@ class TestAssemble:
         assert assemble_sentences([]) == []
 
 
+class TestProvenanceBoundaries:
+    """A speaker, modality, or source-hint change must force an assembly boundary."""
+
+    def test_unfinished_cue_speaker_change_forces_boundary(self):
+        # Speaker A's cue is NOT sentence-final, yet Speaker B's cue must never
+        # be merged into A's sentence.
+        cues = [
+            Cue(0, "국민연금 제도의", start=0.0, end=2.0, speaker="host"),
+            Cue(1, "과연 개인 저축보다", start=2.0, end=4.0, speaker="guest"),
+        ]
+        units = assemble_sentences(cues)
+        assert len(units) == 2
+        assert units[0].text == "국민연금 제도의"
+        assert units[0].speaker == "host"
+        assert units[1].text == "과연 개인 저축보다"
+        assert units[1].speaker == "guest"
+
+    def test_speaker_change_with_no_punctuation(self):
+        cues = [
+            Cue(0, "the sensor kit can cut", start=0.0, end=3.0, speaker="vendor"),
+            Cue(1, "water use by twenty percent", start=3.0, end=6.0, speaker="operator"),
+            Cue(2, "that is what the brochure says", start=6.0, end=9.0, speaker="operator"),
+        ]
+        units = assemble_sentences(cues)
+        assert len(units) == 2
+        assert units[0].cue_indices == [0]
+        assert units[1].cue_indices == [1, 2]
+        assert units[1].speaker == "operator"
+
+    def test_modality_change_forces_boundary(self):
+        cues = [
+            Cue(0, "caption text that keeps going", start=0.0, end=3.0, modality_source="caption"),
+            Cue(1, "screen text read from the chart", start=3.0, end=6.0, modality_source="ocr"),
+        ]
+        units = assemble_sentences(cues)
+        assert len(units) == 2
+        assert units[0].modality_source == "caption"
+        assert units[1].modality_source == "ocr"
+
+    def test_source_hint_change_forces_boundary(self):
+        cues = [
+            Cue(0, "the transcript continues", start=0.0, end=3.0, source_hint="transcript"),
+            Cue(1, "but the external pack adds context", start=3.0, end=6.0, source_hint="external_pack"),
+        ]
+        units = assemble_sentences(cues)
+        assert len(units) == 2
+        assert units[0].source_hint == "transcript"
+        assert units[1].source_hint == "external_pack"
+
+    def test_same_speaker_still_merges(self):
+        cues = [
+            Cue(0, "국민 연금은", start=0.0, end=2.0, speaker="host"),
+            Cue(1, "과연 필요한가요", start=2.0, end=4.0, speaker="host"),
+        ]
+        units = assemble_sentences(cues)
+        assert len(units) == 1
+        assert units[0].cue_indices == [0, 1]
+
+    def test_unit_keeps_full_provenance(self):
+        cues = [
+            Cue(0, "첫 조각", start=10.0, end=13.0, speaker="A", modality_source="caption", source_hint="transcript"),
+            Cue(1, "둘째 조각입니다", start=13.0, end=16.0, speaker="A", modality_source="caption", source_hint="transcript"),
+        ]
+        unit = assemble_sentences(cues)[0]
+        d = unit.to_dict()
+        assert d["cue_indices"] == [0, 1]
+        assert d["source_time_refs"] == [10.0, 13.0]
+        assert d["start"] == 10.0 and d["end"] == 16.0
+        assert d["speaker"] == "A"
+        assert d["modality_source"] == "caption"
+        assert d["source_hint"] == "transcript"
+
+
 class TestFromDicts:
     def test_mmss_timestamps(self):
         rows = [
@@ -173,3 +246,129 @@ class TestTimestampHelpers:
         assert format_timestamp(186.0) == "03:06"
         assert format_timestamp(3723.0) == "01:02:03"
         assert format_timestamp(None) is None
+
+
+# --- Section 2: actual cue start/end provenance ---
+
+
+class TestCueTimingProvenance:
+    def _rows(self):
+        return [
+            {
+                "text": "첫 번째 조각은",
+                "start": 12.0,
+                "end": 14.8,
+                "time_ref": "00:12",
+                "speaker": "host",
+                "modality_source": "caption",
+                "source_hint": "transcript",
+            },
+            {
+                "text": "두 번째 조각입니다",
+                "start": 15.0,
+                "end": 17.1,
+                "time_ref": "00:15",
+                "speaker": "host",
+                "modality_source": "caption",
+                "source_hint": "transcript",
+            },
+        ]
+
+    def test_merged_cues_keep_distinct_starts_and_ends(self):
+        units = assemble_from_dicts(self._rows())
+        assert len(units) == 1
+        coords = units[0].source_cue_coordinates
+        assert len(coords) == 2
+        assert coords[0] == {"cue_index": 0, "time_ref": "00:12", "start": 12.0, "end": 14.8}
+        assert coords[1] == {"cue_index": 1, "time_ref": "00:15", "start": 15.0, "end": 17.1}
+
+    def test_span_start_is_first_cue_start(self):
+        units = assemble_from_dicts(self._rows())
+        assert units[0].start == 12.0
+
+    def test_span_end_is_final_cue_end_not_start(self):
+        units = assemble_from_dicts(self._rows())
+        # Regression: previously end was set to the final cue start (15.0).
+        assert units[0].end == 17.1
+        assert units[0].end != 15.0
+        assert units[0].span_seconds == pytest.approx(5.1)
+
+    def test_every_cue_coordinate_preserved_in_to_dict(self):
+        units = assemble_from_dicts(self._rows())
+        d = units[0].to_dict()
+        assert d["source_cue_coordinates"] == [
+            {"cue_index": 0, "time_ref": "00:12", "start": 12.0, "end": 14.8},
+            {"cue_index": 1, "time_ref": "00:15", "start": 15.0, "end": 17.1},
+        ]
+        # Legacy scalar field remains for compatibility.
+        assert d["source_time_refs"] == [12.0, 15.0]
+
+    def test_string_timestamp_timing(self):
+        rows = [
+            {"text": "첫 조각", "start": "00:12.000", "end": "00:15.200", "time_ref": "00:12"},
+            {"text": "둘째 조각입니다", "start": "00:15.200", "end": "00:17.100", "time_ref": "00:15"},
+        ]
+        units = assemble_from_dicts(rows)
+        assert units[0].start == 12.0
+        assert units[0].end == 17.1
+        assert units[0].source_cue_coordinates[1]["end"] == 17.1
+
+    def test_legacy_time_ref_only_input(self):
+        rows = [
+            {"text": "첫 조각", "time_ref": "00:12"},
+            {"text": "둘째 조각입니다", "time_ref": "00:15"},
+        ]
+        units = assemble_from_dicts(
+            rows, start_key="start", time_ref_key="time_ref", end_key="end"
+        )
+        # Legacy fallback: start parsed from time_ref; end stays None (no
+        # fabricated duration).
+        assert units[0].start == 12.0
+        assert units[0].end is None
+        assert units[0].source_cue_coordinates[0]["start"] == 12.0
+        assert units[0].source_cue_coordinates[0]["end"] is None
+
+    def test_missing_end_does_not_fabricate_duration(self):
+        rows = [
+            {"text": "첫 조각", "start": 12.0, "end": 14.0, "time_ref": "00:12"},
+            {"text": "둘째 조각입니다", "start": 14.0, "time_ref": "00:14"},
+        ]
+        units = assemble_from_dicts(rows)
+        assert units[0].start == 12.0
+        assert units[0].end is None, "no end timestamp exists; must not invent one"
+        assert units[0].span_seconds is None
+        assert units[0].source_cue_coordinates[1]["end"] is None
+
+    def test_speaker_boundary_through_assemble_from_dicts(self):
+        rows = [
+            {"text": "첫 조각", "start": 0.0, "end": 2.0, "speaker": "A"},
+            {"text": "둘째 조각입니다", "start": 2.0, "end": 4.0, "speaker": "B"},
+        ]
+        units = assemble_from_dicts(rows)
+        assert len(units) == 2
+        assert units[0].speaker == "A"
+        assert units[1].speaker == "B"
+
+    def test_modality_boundary_through_assemble_from_dicts(self):
+        rows = [
+            {"text": "caption text continues", "modality_source": "caption"},
+            {"text": "chart text here입니다", "modality_source": "ocr"},
+        ]
+        units = assemble_from_dicts(rows)
+        assert len(units) == 2
+        assert units[0].modality_source == "caption"
+        assert units[1].modality_source == "ocr"
+
+    def test_source_hint_boundary_through_assemble_from_dicts(self):
+        rows = [
+            {"text": "transcript segment", "source_hint": "transcript"},
+            {"text": "external pack segment입니다", "source_hint": "external_pack"},
+        ]
+        units = assemble_from_dicts(rows)
+        assert len(units) == 2
+        assert units[0].source_hint == "transcript"
+        assert units[1].source_hint == "external_pack"
+
+    def test_non_dict_cue_row_rejected(self):
+        with pytest.raises(ValueError, match="cue row 1 is not an object"):
+            assemble_from_dicts([{"text": "ok"}, "not-a-dict"])

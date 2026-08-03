@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .errors import InvalidInputError
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -34,6 +36,27 @@ def read_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_required_json(path: Path, *, label: str) -> Any:
+    """Strictly read a required user-supplied JSON file.
+
+    Fails closed on missing file, non-UTF-8, or invalid JSON by raising
+    ``InvalidInputError`` so the CLI can render a structured exit-code-2
+    response instead of a traceback. Use this anywhere a user explicitly
+    supplied a required file; do not use the permissive ``read_json`` default
+    for required inputs.
+    """
+    if not path.is_file():
+        raise InvalidInputError(f"{label} does not exist or is not a file: {path}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError as exc:
+        raise InvalidInputError(f"{label} is not valid UTF-8: {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise InvalidInputError(
+            f"{label} contains invalid JSON at line {exc.lineno}, column {exc.colno}: {path}"
+        ) from exc
 
 
 def write_json(path: Path, data: Any) -> Path:

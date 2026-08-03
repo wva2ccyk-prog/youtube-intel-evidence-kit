@@ -4,7 +4,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .io_utils import read_json, write_json, write_text
+from .errors import InvalidInputError
+from .io_utils import read_json, read_required_json, write_json, write_text
+from .package_validation import assert_valid_residual_package_dict
 from .reporting import render_analysis_worth_markdown
 
 SCHEMA_VERSION = "youtube_analysis_worth_v0.1"
@@ -310,15 +312,48 @@ def build_analysis_worth(
     The packet is a decision aid, not a truth verdict. It asks whether the
     package contains enough residual value, risk, uncertainty, or evidence gaps
     to justify spending on deeper ASR/OCR/vision/source-verification/model lanes.
+
+    Fails closed on structurally invalid residual packages (primary, compare,
+    or run-dir), malformed metadata, and missing required inputs before any
+    output is written.
     """
     run_path = Path(run_dir) if run_dir else None
-    metadata = read_json(run_path / "metadata.json", {}) if run_path else {}
-    if package_path is None and run_path:
-        package_path = run_path / "residual" / "package.json"
+    if run_path is not None:
+        if not run_path.is_dir():
+            raise InvalidInputError(f"run directory does not exist or is not a directory: {run_path}")
+        metadata_path = run_path / "metadata.json"
+        if metadata_path.is_file():
+            metadata = read_required_json(metadata_path, label="run metadata")
+            if not isinstance(metadata, dict):
+                raise InvalidInputError(f"run metadata {metadata_path} must be an object (got {type(metadata).__name__})")
+        else:
+            # Absence is explicitly allowed: no metadata means no metadata.
+            metadata = {}
+        if package_path is None:
+            package_path = run_path / "residual" / "package.json"
+    else:
+        metadata = {}
+    if package_path is None:
+        raise InvalidInputError(
+            "worth requires one valid source: --package, or a valid --run-dir "
+            "containing the expected package"
+        )
+    package = read_required_json(Path(package_path), label="package file")
+    assert_valid_residual_package_dict(package, label="package")
 
-    package = _read_package(package_path)
-    compare = [_read_package(path) for path in compare_packages or []]
-    duplicate = _duplicate_report(package, [item for item in compare if item])
+    compare: list[dict[str, Any]] = []
+    for i, path in enumerate(compare_packages or [], start=1):
+        try:
+            candidate = read_required_json(Path(path), label="compare package file")
+        except InvalidInputError as exc:
+            raise InvalidInputError(f"compare package {i}: {exc}") from exc
+        try:
+            assert_valid_residual_package_dict(candidate, label=f"compare package {i}")
+        except InvalidInputError as exc:
+            raise InvalidInputError(f"compare package {i}: {exc}") from exc
+        compare.append(candidate)
+
+    duplicate = _duplicate_report(package, compare)
     decision = _decide(package, duplicate, metadata)
     result = {
         "schema_version": SCHEMA_VERSION,

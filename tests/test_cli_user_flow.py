@@ -25,9 +25,13 @@ def test_doctor_reports_demo_and_gitignore_contract():
     root = Path(__file__).resolve().parents[1]
     result = _run_cli("doctor", cwd=root)
     assert result["ok"] is True
+    assert result["core"]["runtime_mode"] == "source_checkout"
     assert result["core"]["synthetic_demo_available"] is True
     assert result["core"]["synthetic_topic_demo_available"] is True
-    assert result["safety"]["all_required_ignores_present"] is True
+    assert result["checks"]["synthetic_demo"]["ok"] is True
+    assert result["checks"]["topic_demo"]["ok"] is True
+    assert result["checks"]["gitignore_safety"]["ok"] is True
+    assert result["checks"]["repository_safety_scripts"]["ok"] is True
     assert "youtube-intel topic-demo" in result["recommended_next_command"]
 
 

@@ -24,7 +24,7 @@ This is not meant for broad scraping, channel-wide monitoring, public truth cert
 
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
+. .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -e .[dev]
 youtube-intel doctor
 youtube-intel topic-demo --out outputs/topic_demo
@@ -63,20 +63,36 @@ python -m youtube_mcp_handoff.smoke
 python scripts/public_release_leak_scan.py
 ```
 
-## Main Commands
+The leak scan prefers Git-tracked files (`git ls-files -z`) and content-scans
+all text-decodable tracked files regardless of extension, including `.env*`,
+`.sh`, `.ini`, `.cfg`, `.jsonl`, `.html`, and extensionless config files.
+Local denylist files (`.release_private_denylist.local`,
+`private_denylist.local`) are gitignored and fail the scan if tracked. Clean
+generated artifacts first (`python scripts/clean_generated_artifacts.py`)
+because the scan rejects bytecode/cache artifacts.
 
+## Main Commands
 | Command | Purpose |
 |---|---|
-| `youtube-intel doctor` | Check package posture, optional plugins, topic demo availability, and public-safety ignore rules |
+| `youtube-intel doctor` | Health check: runtime_mode, fixture availability, gitignore safety, and repo-only script presence; exit 2 when unhealthy |
 | `youtube-intel topic-demo --out outputs/topic_demo` | Run synthetic cross-video `VideoKnowledgeRecord -> TopicCollection -> topic terrain` flow |
 | `youtube-intel topic-demo --out outputs/topic_demo_jaccard --clusterer token_jaccard` | Run the same flow with the stricter deterministic token-overlap clusterer |
 | `youtube-intel single-video-demo --out outputs/demo` | Run synthetic single-video residual package -> analysis-worth -> AI handoff flow |
-| `youtube-intel package --segments examples/synthetic_segments.json --out outputs/pkg` | Build a residual package from admitted segment JSON |
+| `youtube-intel package --segments examples/synthetic_segments.json --out outputs/pkg --video-id ID --title "T" --language en` | Build a residual package from admitted segment JSON (video_id/title/language are required; never synthesised) |
 | `youtube-intel worth --package outputs/pkg/residual_package.json --out outputs/worth` | Generate analysis-worth JSON and Markdown |
-| `youtube-intel single-video-handoff --package ... --analysis-worth ... --out outputs/handoff` | Build AI CLI handoff files for a single-video input-layer evidence packet |
+| `youtube-intel single-video-handoff --package ... --analysis-worth ... --out outputs/handoff` | Build AI CLI handoff files from a structurally valid, coherent package+worth pair (complete bundle) |
 | `youtube-intel mcp-stdio` | Run the legacy read-only synthetic overlay MCP-style JSON-RPC stdio smoke server |
 | `youtube-intel topic-mcp-stdio --topic-collection outputs/topic_demo/topic_collection.json` | Run the read-only TopicCollection MCP-ready JSON-RPC stdio handoff facade |
-| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts |
+| `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts (source-checkout only; repository-bound and fail-closed; only generated-output locations are deletable, never arbitrary, protected, or non-generated content; `--dry-run` to preview) |
+
+## Integrity Contracts
+
+- **Timestamps**: segment `start`/`end` are real, fractional-preserving cue timestamps. The default `cue` assembly path (and sentence assembly) carries them into `source_cue_coordinates`, `span_start`/`span_end`, the claim record, the evidence record, and group coordinates — exactly equal at every layer. `time_ref` is only a legacy fallback for start; an absent end is `null`, never fabricated. Structured timestamps are parsed strictly: booleans, NaN/Infinity, negative values, malformed strings, and end-earlier-than-start are all rejected with `InvalidInputError`; fractional precision is preserved without rounding.
+- **Expected groupings**: `topic_demo`-consumed `expected_groupings.json` is strictly validated — `must_link` is required and must be a list of exact two-item non-empty string pairs; `cannot_link` follows the same rule when present; `threshold` must be a finite number in `[0, 1]` (NaN/Infinity/booleans/strings rejected). Duplicate, reversed-duplicate, contradictory (same pair in both must-link and cannot-link), and same-item pairs are rejected, as are unknown fields. Malformed documents fail with exit 2, structured `InvalidInputError`, and no output artifacts.
+- **Package strings**: residual-package `video_id`/`title`/`language` and claim `claim_id`/`text` must actually be strings and non-empty after stripping (whitespace-only values rejected; no `str()` coercion); duplicates and reserved fallback ids (`unknown-video`, `unknown-claim`, ...) are rejected using normalized values.
+- **Handoff coherence**: a complete handoff requires a structurally valid residual package and analysis-worth artifact with matching `video_id` and `title`; every `source_trace` row must carry non-empty `claim_id`/`evidence`/`confidence`, resolve to a package claim, be non-duplicated, and agree with the source claim's `time_ref`/`claim_type`/`evidence`/`confidence`. Handoff timestamps are source-trace exact: a trace can never invent a `time_ref` absent from the source claim, and a present source timestamp requires an exact matching trace timestamp.
+- **MCP validation**: the TopicCollection MCP facade validates every loaded document with the dependency-free runtime validator (schema identity, topic identity, source videos, indexes, groups, terrain, coordinates) before any tool response is constructed; the overlay MCP server loads overlays through `load_validated_operator_overlay()` in every public entry point.
+- **Fixtures**: source checkouts resolve fixtures from canonical repository-root `examples/`; installed wheels use the packaged copies under `youtube_intel._fixtures` (byte-for-byte parity is enforced by `tests/test_fixture_parity.py`).
 
 ## Operator Loop
 

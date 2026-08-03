@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from collections import defaultdict
+import copy
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import math
+
 import re
 from typing import Any
 
-from .io_utils import read_json, write_json, write_text
+from .errors import EvidenceIntegrityError, InvalidInputError
+from .io_utils import read_json, read_required_json, write_json, write_text
 from youtube_residual import build_residual_package, validate_package
 
 VIDEO_RECORD_SCHEMA_VERSION = "youtube_video_knowledge_record_v0.1"
@@ -279,21 +283,51 @@ def _make_group_key_from_claims(claims: list[dict[str, Any]]) -> str:
     return "topic_" + "_".join(ranked)
 
 
-def _group_claims_by_similarity(claims: list[dict[str, Any]], threshold: float = 0.20) -> list[tuple[str, list[dict[str, Any]], float]]:
+def _sort_claims(claims: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deterministic claim order so clustering is invariant to input order.
+
+    claim_uid is globally unique (enforced by ``assert_topic_inputs_valid``),
+    so sorting on (claim_uid, text) makes the clustering result a pure
+    function of the claim set, never of the caller's list order.
+    """
+    return sorted(claims, key=lambda c: (_text(c.get("claim_uid"), ""), _text(c.get("text"), "")))
+
+
+COHESION_RULE = "complete_link_min_similarity"
+
+
+def _group_claims_by_similarity(claims: list[dict[str, Any]], threshold: float = 0.20) -> list[tuple[str, list[dict[str, Any]], float, float]]:
+    """Group claims by normalized similarity under a complete-link rule.
+
+    A claim joins a group only when its similarity to EVERY current member is
+    at or above ``threshold``. Single-link behavior (similar to *any* member)
+    is rejected because it permits bridge chaining: A~B and B~C would pull
+    unrelated A and C together through the weak bridge B. Complete-link makes
+    the result deterministic and input-order invariant (claims are sorted
+    first), and the recorded minimum similarity explains why each group is
+    internally coherent.
+    """
+    ordered = _sort_claims(claims)
     groups: list[list[dict[str, Any]]] = []
-    for claim in claims:
+    for claim in ordered:
         best_idx: int | None = None
-        best_score = 0.0
+        best_min = 0.0
         for idx, group in enumerate(groups):
-            score = max(_claim_similarity(claim, member) for member in group)
-            if score > best_score:
+            min_score = min(_claim_similarity(claim, member) for member in group)
+            if min_score >= threshold and min_score > best_min:
                 best_idx = idx
-                best_score = score
-        if best_idx is not None and best_score >= threshold:
+                best_min = min_score
+        if best_idx is not None:
             groups[best_idx].append(claim)
+            claim["grouping_note"] = {
+                "rule": COHESION_RULE,
+                "join_min_similarity": best_min,
+                "joined_existing_group": True,
+            }
         else:
             groups.append([claim])
-    scored: list[tuple[str, list[dict[str, Any]], float]] = []
+            claim["grouping_note"] = {"rule": COHESION_RULE, "join_min_similarity": None, "joined_existing_group": False}
+    scored: list[tuple[str, list[dict[str, Any]], float, float]] = []
     for group in groups:
         key = _make_group_key_from_claims(group)
         pair_scores = [
@@ -302,11 +336,12 @@ def _group_claims_by_similarity(claims: list[dict[str, Any]], threshold: float =
             for j in range(i + 1, len(group))
         ]
         mean_score = round(sum(pair_scores) / len(pair_scores), 4) if pair_scores else 1.0
+        min_score = round(min(pair_scores), 4) if pair_scores else 1.0
         for claim in group:
             claim["claim_group_key"] = key
             claim["claim_group_label"] = _group_label(key)
             claim["normalized_tokens"] = sorted(_token_set(claim))
-        scored.append((key, group, mean_score))
+        scored.append((key, group, mean_score, min_score))
     return scored
 
 
@@ -320,8 +355,8 @@ CLUSTERERS = ("normalized", "token_jaccard")
 
 
 def _token_jaccard(a: set[str], b: set[str]) -> float:
-    if not a and not b:
-        return 1.0
+    # Two claims with no usable tokens carry no evidence of similarity;
+    # returning 1.0 here would force-merge unrelated empty claims.
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
@@ -330,31 +365,49 @@ def _token_jaccard(a: set[str], b: set[str]) -> float:
 def _group_claims_by_token_jaccard(
     claims: list[dict[str, Any]],
     threshold: float = 0.5,
-) -> list[tuple[str, list[dict[str, Any]], float]]:
-    """Group claims by token-set Jaccard overlap only.
+) -> list[tuple[str, list[dict[str, Any]], float, float]]:
+    """Group claims by token-set Jaccard overlap only, complete-link.
 
     This is a stricter, fully lexical alternative to the default mixed
-    similarity. A claim joins the first existing group whose representative
-    token set overlaps at or above `threshold`; otherwise it starts a new
-    group. No network, no embeddings, no model download.
+    similarity. A claim joins an existing group only when its token set
+    overlaps EVERY member's token set at or above ``threshold``; otherwise it
+    starts a new group. The group's representative token set is the union of
+    its members (recomputed on every join), so no single first member pins the
+    group representation. Claims are sorted first, so the grouping is
+    invariant to input order. No network, no embeddings, no model download.
     """
+    ordered = _sort_claims(claims)
     groups: list[list[dict[str, Any]]] = []
     group_tokens: list[set[str]] = []
-    for claim in claims:
+    for claim in ordered:
         tokens = _token_set(claim)
         matched: int | None = None
         best_score = 0.0
-        for idx, rep_tokens in enumerate(group_tokens):
-            score = _token_jaccard(tokens, rep_tokens)
-            if score >= threshold and score > best_score:
+        for idx, group in enumerate(groups):
+            member_scores = [_token_jaccard(tokens, _token_set(member)) for member in group]
+            min_score = min(member_scores) if member_scores else 0.0
+            if min_score >= threshold and min_score > best_score:
                 matched = idx
-                best_score = score
+                best_score = min_score
         if matched is not None:
             groups[matched].append(claim)
+            group_tokens[matched] = set().union(*(_token_set(m) for m in groups[matched]))
+            claim["grouping_note"] = {
+                "rule": COHESION_RULE,
+                "metric": "token_jaccard",
+                "join_min_similarity": best_score,
+                "joined_existing_group": True,
+            }
         else:
             groups.append([claim])
             group_tokens.append(tokens)
-    scored: list[tuple[str, list[dict[str, Any]], float]] = []
+            claim["grouping_note"] = {
+                "rule": COHESION_RULE,
+                "metric": "token_jaccard",
+                "join_min_similarity": None,
+                "joined_existing_group": False,
+            }
+    scored: list[tuple[str, list[dict[str, Any]], float, float]] = []
     for group in groups:
         key = _make_group_key_from_claims(group)
         pair_scores = [
@@ -363,11 +416,12 @@ def _group_claims_by_token_jaccard(
             for j in range(i + 1, len(group))
         ]
         mean_score = round(sum(pair_scores) / len(pair_scores), 4) if pair_scores else 1.0
+        min_score = round(min(pair_scores), 4) if pair_scores else 1.0
         for claim in group:
             claim["claim_group_key"] = key
             claim["claim_group_label"] = _group_label(key)
             claim["normalized_tokens"] = sorted(_token_set(claim))
-        scored.append((key, group, mean_score))
+        scored.append((key, group, mean_score, min_score))
     return scored
 
 
@@ -376,8 +430,13 @@ def _cluster_claims(
     clusterer: str,
     *,
     token_jaccard_threshold: float = 0.5,
-) -> list[tuple[str, list[dict[str, Any]], float]]:
-    """Dispatch to the selected deterministic clusterer."""
+) -> list[tuple[str, list[dict[str, Any]], float, float]]:
+    """Dispatch to the selected deterministic clusterer.
+
+    Returns ``(group_key, claims, mean_score, min_score)`` tuples where
+    ``min_score`` is the complete-link minimum pairwise similarity — the
+    honesty floor for the group's internal coherence.
+    """
     if clusterer == "token_jaccard":
         return _group_claims_by_token_jaccard(claims, threshold=token_jaccard_threshold)
     return _group_claims_by_similarity(claims)
@@ -429,14 +488,27 @@ def _make_evidence_record(
     time_ref: Any,
     modality_sources: list[str],
     confidence: str,
+    source_time_refs: list[Any] | None = None,
+    cue_indices: list[int] | None = None,
+    span_start: Any = None,
+    span_end: Any = None,
+    source_cue_coordinates: list[Any] | None = None,
 ) -> dict[str, Any]:
-    timestamp_start = _parse_time_ref_to_seconds(time_ref)
+    # Real structured span takes precedence over the display-oriented time_ref;
+    # keep full fractional precision and never round. End stays None when no
+    # real span end exists (no fabricated timestamp).
+    timestamp_start = (
+        float(span_start)
+        if span_start is not None
+        else _parse_time_ref_to_seconds(time_ref)
+    )
+    timestamp_end = float(span_end) if span_end is not None else None
     evidence_id = f"{video_id}:E{local_index:04d}"
     return {
         "evidence_id": evidence_id,
         "video_id": video_id,
         "timestamp_start": timestamp_start,
-        "timestamp_end": None,
+        "timestamp_end": timestamp_end,
         "time_ref": time_ref,
         "speaker": speaker,
         "speaker_confidence": "high" if speaker not in (None, "", "unknown") else "unknown",
@@ -444,6 +516,11 @@ def _make_evidence_record(
         "text": text,
         "confidence": confidence,
         "source_separation": "video_internal_claim_not_external_source",
+        "source_time_refs": list(source_time_refs) if source_time_refs else [],
+        "source_cue_coordinates": [dict(c) for c in (source_cue_coordinates or [])],
+        "cue_indices": list(cue_indices) if cue_indices else [],
+        "span_start": span_start,
+        "span_end": span_end,
     }
 
 
@@ -495,6 +572,11 @@ def build_video_knowledge_record(
             time_ref=claim.get("time_ref"),
             modality_sources=modality_sources,
             confidence=confidence,
+            source_time_refs=claim.get("source_time_refs"),
+            cue_indices=claim.get("cue_indices"),
+            span_start=claim.get("span_start"),
+            span_end=claim.get("span_end"),
+            source_cue_coordinates=claim.get("source_cue_coordinates"),
         )
         evidence_records.append(evidence_record)
         record = {
@@ -523,6 +605,11 @@ def build_video_knowledge_record(
             },
             "confidence": confidence,
             "modality_sources": modality_sources,
+            "source_time_refs": list(claim.get("source_time_refs") or []),
+            "source_cue_coordinates": [dict(c) for c in (claim.get("source_cue_coordinates") or [])],
+            "cue_indices": list(claim.get("cue_indices") or []),
+            "span_start": claim.get("span_start"),
+            "span_end": claim.get("span_end"),
             "claim_group_key": group_key,
             "claim_group_label": _group_label(group_key),
             "stance": stance,
@@ -586,10 +673,12 @@ def _source_diversity(claims: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def _why_grouped(key: str, claims: list[dict[str, Any]]) -> list[str]:
+def _why_grouped(key: str, claims: list[dict[str, Any]], min_score: float | None = None) -> list[str]:
     canonical = [str(c.get("canonical_text") or _canonicalize_claim_text(_text(c.get("text"), ""))) for c in claims]
     shared_tokens = sorted(set.intersection(*(set(t.split()) for t in canonical))) if len(canonical) >= 2 else []
     reasons = [f"normalized similarity grouping key: {key}"]
+    if min_score is not None:
+        reasons.append(f"cohesion rule: {COHESION_RULE} (min pairwise similarity {min_score:.4f})")
     if shared_tokens:
         reasons.append("shared normalized tokens: " + ", ".join(shared_tokens[:8]))
     if len({_text(c.get("source_video_id"), "unknown") for c in claims}) >= 2:
@@ -599,22 +688,39 @@ def _why_grouped(key: str, claims: list[dict[str, Any]]) -> list[str]:
 
 def _make_disagreement_relation(group_id: str, group: dict[str, Any], claims: list[dict[str, Any]]) -> dict[str, Any] | None:
     stances = {_text(c.get("stance"), "reported_claim") for c in claims}
-    if not (
+    stance_mixed = (
         "claim_or_promotion" in stances
         and ("caution_or_counterpoint" in stances or "hypothesis_or_alternative" in stances)
-    ):
+    )
+    opposition_pairs = [
+        [i, j]
+        for i in range(len(claims))
+        for j in range(i + 1, len(claims))
+        if _opposition_score(claims[i], claims[j]) >= 0.45
+    ]
+    if not (stance_mixed or opposition_pairs):
         return None
     relation_type = "support_vs_caution"
     if "hypothesis_or_alternative" in stances and "caution_or_counterpoint" not in stances:
         relation_type = "alternative_explanation"
+    elif not stance_mixed:
+        relation_type = "opposing_stances_pair"
     return {
         "relation_id": f"D{group_id[1:]}",
         "claim_group_id": group_id,
         "relation_type": relation_type,
         "claim_uids": [_text(c.get("claim_uid"), "unknown-claim") for c in claims],
+        "opposition_pairs": [
+            {
+                "left_claim_uid": _text(claims[pair[0]].get("claim_uid"), "unknown-claim"),
+                "right_claim_uid": _text(claims[pair[1]].get("claim_uid"), "unknown-claim"),
+                "opposition_score": _opposition_score(claims[pair[0]], claims[pair[1]]),
+            }
+            for pair in opposition_pairs
+        ],
         "confidence": "medium" if len(claims) >= 2 else "low",
         "human_review_required": True,
-        "why_flagged": "deterministic alpha grouping found promotional/supporting stance alongside caution or alternative stance in the same normalized topic group",
+        "why_flagged": "deterministic alpha grouping found promotional/supporting stance alongside caution or alternative stance in the same normalized topic group, or a pair-level opposition signal within the group",
     }
 
 
@@ -647,20 +753,41 @@ _OPINION_AXES = {
 
 
 def _dominant_axis(group: dict[str, Any]) -> str:
-    """Pick the opinion axis for a claim group from its support roles.
+    """Pick the opinion axis for a claim group from actual role counts.
 
-    Uses the group's own `support_roles` terrain. Falls back to `reported`
-    when no clear role is present. Never invents a stance.
+    Dominance is decided by counting each claim's support role against the
+    opinion-axis role sets; the axis with the most role assignments wins. A
+    single ``supporting`` role can no longer win merely because the enum
+    lists it first. Ties are broken deterministically by the declared
+    ``_OPINION_AXES`` order (supporting, challenging, alternative), and a
+    group with no recognized roles falls back to ``reported``.
+
+    ``support_role_counts`` (a dict of role name -> claim count) is preferred
+    because it preserves multiplicity; ``support_roles`` (a deduplicated list)
+    is only a fallback for callers that never populated counts.
     """
-    roles = set(_as_list(group.get("support_roles")))
-    for axis_key, axis in _OPINION_AXES.items():
-        if axis_key == "reported":
-            continue
-        if roles & axis["roles"]:
-            # A group can carry multiple roles; prefer the first non-reported
-            # axis in declared order (supporting, challenging, alternative).
-            return axis_key
-    return "reported"
+    counts: dict[str, int] = defaultdict(int)
+    role_counts = group.get("support_role_counts")
+    if isinstance(role_counts, dict):
+        for role, count in role_counts.items():
+            count = int(count) if isinstance(count, (int, float)) else 1
+            for axis_key, axis in _OPINION_AXES.items():
+                if axis_key == "reported":
+                    continue
+                if _text(role) in axis["roles"]:
+                    counts[axis_key] += count
+    else:
+        for role in _as_list(group.get("support_roles")):
+            role_text = _text(role)
+            for axis_key, axis in _OPINION_AXES.items():
+                if axis_key == "reported":
+                    continue
+                if role_text in axis["roles"]:
+                    counts[axis_key] += 1
+    if not counts:
+        return "reported"
+    ordered_axes = [k for k in _OPINION_AXES if k != "reported"]
+    return max(ordered_axes, key=lambda k: (counts.get(k, 0), -ordered_axes.index(k)))
 
 
 def build_opinion_groups(
@@ -719,6 +846,708 @@ def build_opinion_groups(
         warnings.append("opinion_group_builder_produced_no_groups")
     return opinion_groups, warnings
 
+# Reserved fallback identifiers: records must never rely on these, because two
+# records can silently collide on the same fallback value.
+RESERVED_FALLBACK_IDS = {"unknown-video", "unknown-evidence", "unknown-claim", "unknown-group"}
+
+
+def _local_claim_id(claim: dict[str, Any]) -> str:
+    """Local claim id: the record's field, or the ``video:local`` suffix."""
+    local = _text(claim.get("local_claim_id"), "")
+    if local:
+        return local
+    uid = _text(claim.get("claim_uid"), "")
+    return uid.rsplit(":", 1)[-1] if ":" in uid else uid
+
+
+def validate_topic_inputs(records: list[dict[str, Any]]) -> list[str]:
+    """Return integrity issues for a list of VideoKnowledgeRecord dicts.
+
+    Fails closed (returns a non-empty list) when identifiers are empty,
+    duplicated, or reserved-fallback, or when cross-references dangle or
+    declared counts disagree with actual arrays. The caller rejects the build
+    with an :class:`EvidenceIntegrityError` when any issue is found.
+    """
+    issues: list[str] = []
+    if not records:
+        return ["no video records provided; an empty TopicCollection must not be built"]
+
+    claims: list[dict[str, Any]] = []
+    evidence_records: list[dict[str, Any]] = []
+    local_ids_by_video: dict[str, set[str]] = defaultdict(set)
+    video_ids_in_claims: list[str] = []
+    video_ids_in_evidence: list[str] = []
+
+    for ri, record in enumerate(records):
+        if not isinstance(record, dict):
+            issues.append(f"record {ri} is not an object")
+            continue
+        video = record.get("video")
+        if not isinstance(video, dict) or not video:
+            issues.append(f"record {ri}: video is missing or not an object")
+            video = {}
+        video_id = _text(video.get("video_id"), "")
+        video_ids_in_claims.append(video_id)
+
+        raw_claims = record.get("claim_records")
+        if not isinstance(raw_claims, list):
+            issues.append(f"record {ri}: claim_records is not a list")
+            raw_claims = []
+        raw_evidence = record.get("evidence_records")
+        if not isinstance(raw_evidence, list):
+            issues.append(f"record {ri}: evidence_records is not a list")
+            raw_evidence = []
+        counts = record.get("counts") or {}
+        if counts.get("claim_total") is not None and counts["claim_total"] != len(raw_claims):
+            issues.append(
+                f"record {ri} (video {video_id!r}): declared claim_total {counts['claim_total']} "
+                f"!= actual claim_records {len(raw_claims)}"
+            )
+        if counts.get("evidence_total") is not None and counts["evidence_total"] != len(raw_evidence):
+            issues.append(
+                f"record {ri} (video {video_id!r}): declared evidence_total {counts['evidence_total']} "
+                f"!= actual evidence_records {len(raw_evidence)}"
+            )
+
+        for ci, claim in enumerate(raw_claims):
+            if not isinstance(claim, dict):
+                issues.append(f"record {ri} claim row {ci} is not an object (got {type(claim).__name__}); "
+                              f"non-dictionary claim rows are never silently discarded")
+                continue
+            claim_uid = _text(claim.get("claim_uid"), "")
+            claim_source = _text(claim.get("source_video_id"), "")
+            if not claim_source:
+                issues.append(f"claim {claim_uid!r}: source_video_id is empty")
+            elif claim_source != video_id:
+                issues.append(f"claim {claim_uid!r}: source_video_id {claim_source!r} does not match record video {video_id!r}")
+            if claim_source in RESERVED_FALLBACK_IDS:
+                issues.append(f"claim {claim_uid!r}: source_video_id uses reserved fallback id: {claim_source!r}")
+            if not _text(claim.get("text")):
+                issues.append(f"claim {claim_uid!r}: text is empty")
+            local = _local_claim_id(claim)
+            if not local:
+                issues.append(f"claim {claim_uid!r}: local claim id is empty")
+            elif local in local_ids_by_video[video_id]:
+                issues.append(f"duplicate local claim id {local!r} within video {video_id!r}")
+            else:
+                local_ids_by_video[video_id].add(local)
+            if not _as_list(claim.get("evidence_ids")):
+                issues.append(f"claim {claim_uid!r}: has no evidence ids")
+            claims.append(claim)
+
+        for ei, evidence in enumerate(raw_evidence):
+            if not isinstance(evidence, dict):
+                issues.append(f"record {ri} evidence row {ei} is not an object (got {type(evidence).__name__}); "
+                              f"non-dictionary evidence rows are never silently discarded")
+                continue
+            eid = _text(evidence.get("evidence_id"), "")
+            owner = _text(evidence.get("video_id"), "")
+            if not owner:
+                issues.append(f"evidence row {ei} (record {ri}): video_id is empty")
+            elif owner != video_id:
+                issues.append(f"evidence {eid!r}: video_id {owner!r} does not match record video {video_id!r}")
+            if owner in RESERVED_FALLBACK_IDS:
+                issues.append(f"evidence {eid!r}: video_id uses reserved fallback id: {owner!r}")
+            modality = _as_list(evidence.get("modality"))
+            if not modality or not all(isinstance(m, str) and m.strip() for m in modality):
+                issues.append(f"evidence {eid!r}: modality is empty or contains invalid entries")
+            video_ids_in_evidence.append(owner)
+            evidence_records.append(evidence)
+
+    def _check_ids(label: str, values: list[str]) -> None:
+        seen: set[str] = set()
+        for value in values:
+            if not value:
+                issues.append(f"{label} is empty")
+            elif value in seen:
+                issues.append(f"duplicate {label}: {value}")
+            else:
+                seen.add(value)
+            if value in RESERVED_FALLBACK_IDS:
+                issues.append(f"{label} uses reserved fallback id: {value}")
+
+    _check_ids("video_id", video_ids_in_claims)
+    _check_ids("claim_uid", [_text(c.get("claim_uid"), "") for c in claims])
+    _check_ids("evidence_id", [_text(e.get("evidence_id"), "") for e in evidence_records])
+
+    video_ids = {vid for vid in video_ids_in_claims if vid and vid not in RESERVED_FALLBACK_IDS}
+    evidence_index = {_text(e.get("evidence_id"), ""): e for e in evidence_records}
+
+    for claim in claims:
+        claim_uid = _text(claim.get("claim_uid"), "")
+        source = _text(claim.get("source_video_id"), "")
+        if source and source not in video_ids:
+            issues.append(f"claim {claim_uid!r}: source_video_id {source!r} does not resolve to any video")
+        claim_evidence_ids = [_text(e, "") for e in _as_list(claim.get("evidence_ids"))]
+        for eid in claim_evidence_ids:
+            if eid and eid not in evidence_index:
+                issues.append(f"claim {claim_uid!r}: evidence_id {eid!r} does not resolve")
+        coordinator = claim.get("evidence_coordinate")
+        if isinstance(coordinator, dict):
+            cid = _text(coordinator.get("evidence_id"))
+            if not cid:
+                issues.append(f"claim {claim_uid!r}: evidence_coordinate has no evidence_id")
+            elif cid not in claim_evidence_ids:
+                issues.append(f"claim {claim_uid!r}: evidence_coordinate.evidence_id {cid!r} is not in evidence_ids")
+            elif cid not in evidence_index:
+                issues.append(f"claim {claim_uid!r}: evidence_coordinate.evidence_id {cid!r} dangles")
+            else:
+                ref = evidence_index[cid]
+                if _text(coordinator.get("video_id")) != _text(ref.get("video_id")):
+                    issues.append(f"claim {claim_uid!r}: coordinate video_id differs from evidence record")
+                for field in ("timestamp_start", "timestamp_end", "time_ref", "speaker"):
+                    if coordinator.get(field) != ref.get(field):
+                        issues.append(
+                            f"claim {claim_uid!r}: coordinate.{field} does not match evidence record"
+                        )
+                if _text(coordinator.get("speaker_confidence")) != _text(ref.get("speaker_confidence")):
+                    issues.append(f"claim {claim_uid!r}: coordinate.speaker_confidence differs from evidence record")
+                if list(_as_list(coordinator.get("modality"))) != list(_as_list(ref.get("modality"))):
+                    issues.append(f"claim {claim_uid!r}: coordinate.modality differs from evidence record")
+        elif "evidence_ids" in claim:
+            issues.append(f"claim {claim_uid!r}: missing evidence_coordinate")
+
+    for evidence in evidence_records:
+        eid = _text(evidence.get("evidence_id"), "")
+        owner = _text(evidence.get("video_id"), "")
+        if owner and owner not in video_ids:
+            issues.append(f"evidence {eid!r}: video_id {owner!r} does not resolve to any video")
+
+    return issues
+
+
+def assert_topic_inputs_valid(records: list[dict[str, Any]]) -> None:
+    """Raise :class:`EvidenceIntegrityError` when record identifiers are invalid."""
+    issues = validate_topic_inputs(records)
+    if issues:
+        raise EvidenceIntegrityError(
+            "topic input integrity check failed: " + "; ".join(issues[:8])
+            + (f" (+{len(issues) - 8} more)" if len(issues) > 8 else "")
+        )
+
+
+def validate_topic_collection_document(collection: dict[str, Any]) -> list[str]:
+    """Return every integrity issue for a built TopicCollection document.
+
+    Dependency-free runtime validator used by the MCP facade (and available to
+    callers) so an invalid document can never become a plausible successful
+    tool response. Enforces the core TopicCollection contract: exact schema
+    identity, topic identity, source videos, declared counts, claim/evidence
+    indexes, claim groups, terrain references, and coordinate agreement.
+    """
+    issues: list[str] = []
+    if not isinstance(collection, dict):
+        return ["collection_not_object"]
+    issues += _validate_topic_metadata(collection)
+    issues += _validate_source_videos(collection)
+    issues += _validate_declared_counts(collection)
+    issues += _validate_claim_index(collection)
+    issues += _validate_evidence_index(collection)
+    issues += _validate_claim_groups(collection)
+    issues += _validate_terrain(collection)
+    return issues
+
+
+def _validate_topic_metadata(collection: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    required_top = {
+        "schema_version", "topic", "source_videos", "video_record_count", "claim_total",
+        "claim_groups", "terrain", "claim_index", "evidence_index", "grouping_method",
+        "provenance", "limitations",
+    }
+    for field in sorted(required_top):
+        if field not in collection:
+            issues.append(f"missing required top-level field: {field}")
+    if collection.get("schema_version") != "youtube_topic_collection_v0.1":
+        issues.append(
+            f"schema_version must be 'youtube_topic_collection_v0.1', got {collection.get('schema_version')!r}"
+        )
+    if collection.get("analysis_layer") != "cross_video_topic_collection":
+        issues.append("analysis_layer must be 'cross_video_topic_collection'")
+    topic = collection.get("topic")
+    if not isinstance(topic, dict):
+        issues.append("topic must be an object")
+    else:
+        if not _required_nonempty_str(topic.get("topic_id")):
+            issues.append("topic.topic_id must be a non-empty string")
+        if not _required_nonempty_str(topic.get("title")):
+            issues.append("topic.title must be a non-empty string")
+        final_objective = topic.get("final_objective")
+        if not isinstance(final_objective, str):
+            issues.append("topic.final_objective must be a string")
+    return issues
+
+
+def _required_nonempty_str(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_optional_timestamp(value: Any) -> list[str]:
+    """Validate a timestamp as None or a finite non-negative number.
+
+    Booleans are rejected (they are not numbers), NaN/Infinity are rejected via
+    ``math.isfinite``, and negative seconds are rejected. Empty strings are not
+    treated as timestamps.
+    """
+    if value is None:
+        return []
+    if isinstance(value, bool):
+        return ["must be a number or None (booleans are not timestamps)"]
+    if not isinstance(value, (int, float)):
+        return ["must be a number or None"]
+    if not math.isfinite(value):
+        return ["must be finite (NaN/Infinity rejected)"]
+    if value < 0:
+        return ["must be non-negative"]
+    return []
+
+
+def _validate_optional_string(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, str):
+        return ["must be a string or None"]
+    return []
+
+
+def _validate_source_videos(collection: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    source_videos = collection.get("source_videos")
+    if not isinstance(source_videos, list) or not source_videos:
+        issues.append("source_videos must be a non-empty list")
+        return issues
+    seen: set[str] = set()
+    for i, v in enumerate(source_videos):
+        if not isinstance(v, dict):
+            issues.append(f"source_videos[{i}] must be an object")
+            continue
+        video_id = _text(v.get("video_id"))
+        if not _required_nonempty_str(v.get("video_id")):
+            issues.append(f"source_videos[{i}].video_id must be a non-empty string")
+        elif video_id in RESERVED_FALLBACK_IDS:
+            issues.append(f"source_videos[{i}].video_id uses reserved fallback id: {video_id!r}")
+        elif video_id in seen:
+            issues.append(f"duplicate source video_id: {video_id!r}")
+        else:
+            seen.add(video_id)
+        for field in ("title", "role_in_topic", "transcript_source", "transcript_quality"):
+            if field not in v:
+                issues.append(f"source_videos[{i}] is missing required field: {field}")
+            elif not isinstance(v[field], str):
+                issues.append(f"source_videos[{i}].{field} must be a string")
+    return issues
+
+
+def _validate_declared_counts(collection: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    video_record_count = collection.get("video_record_count")
+    if not isinstance(video_record_count, int) or isinstance(video_record_count, bool):
+        issues.append("video_record_count must be a positive integer")
+    else:
+        source_videos = _as_list(collection.get("source_videos"))
+        if isinstance(source_videos, list) and video_record_count != len(source_videos):
+            issues.append(f"video_record_count {video_record_count} != source_videos {len(source_videos)}")
+    claim_total = collection.get("claim_total")
+    claim_index = collection.get("claim_index")
+    if not isinstance(claim_total, int) or isinstance(claim_total, bool) or claim_total <= 0:
+        issues.append("claim_total must be a positive integer")
+    elif isinstance(claim_index, dict) and claim_total != len(claim_index):
+        issues.append(f"claim_total {claim_total} != claim_index size {len(claim_index)}")
+    return issues
+
+
+def _source_video_ids(collection: dict[str, Any]) -> set[str]:
+    return {
+        _text(v.get("video_id"))
+        for v in _as_list(collection.get("source_videos"))
+        if isinstance(v, dict)
+    }
+
+
+def _validate_claim_index(collection: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    claim_index = collection.get("claim_index")
+    if not isinstance(claim_index, dict) or not claim_index:
+        issues.append("claim_index must be a non-empty object")
+        return issues
+    evidence_index = collection.get("evidence_index")
+    if not isinstance(evidence_index, dict):
+        evidence_index = {}
+    source_ids = _source_video_ids(collection)
+    for index_key, claim in claim_index.items():
+        if not _required_nonempty_str(index_key):
+            issues.append(f"claim_index key must be a non-empty string: {index_key!r}")
+        if not isinstance(claim, dict):
+            issues.append(f"claim_index[{index_key!r}] is not an object")
+            continue
+        uid = claim.get("claim_uid")
+        if not _required_nonempty_str(uid):
+            issues.append(f"claim_index[{index_key!r}]: claim_uid must be a non-empty string")
+        elif _text(index_key) != _text(uid):
+            issues.append(f"claim_index key {index_key!r} != claim_uid {uid!r}")
+        source = claim.get("source_video_id")
+        if not _required_nonempty_str(source):
+            issues.append(f"claim_index[{index_key!r}]: source_video_id is empty")
+        elif source_ids and _text(source) not in source_ids:
+            issues.append(f"claim_index[{index_key!r}]: source_video_id {source!r} does not resolve to source_videos")
+        if not _required_nonempty_str(claim.get("text")):
+            issues.append(f"claim_index[{index_key!r}]: text is empty")
+        evidence_ids = _as_list(claim.get("evidence_ids"))
+        if not evidence_ids:
+            issues.append(f"claim_index[{index_key!r}]: evidence_ids must be a non-empty list")
+        seen_ev: set[str] = set()
+        for eid in evidence_ids:
+            if not _required_nonempty_str(eid):
+                issues.append(f"claim_index[{index_key!r}]: evidence id must be a non-empty string")
+                continue
+            if eid in seen_ev:
+                issues.append(f"claim_index[{index_key!r}]: duplicate evidence id: {eid!r}")
+            elif eid in RESERVED_FALLBACK_IDS:
+                issues.append(f"claim_index[{index_key!r}]: evidence id uses reserved fallback id: {eid!r}")
+            else:
+                seen_ev.add(eid)
+            if eid not in evidence_index:
+                issues.append(f"claim_index[{index_key!r}]: evidence id does not resolve: {eid!r}")
+        coord = claim.get("evidence_coordinate")
+        if not isinstance(coord, dict):
+            issues.append(f"claim_index[{index_key!r}]: missing evidence_coordinate or not an object")
+            continue
+        cid = coord.get("evidence_id")
+        if not _required_nonempty_str(cid):
+            issues.append(f"claim_index[{index_key!r}]: evidence_coordinate.evidence_id must be a non-empty string")
+        elif cid not in seen_ev:
+            issues.append(f"claim_index[{index_key!r}]: coordinate evidence_id not in evidence_ids")
+        elif cid not in evidence_index:
+            issues.append(f"claim_index[{index_key!r}]: coordinate evidence_id dangles")
+        elif isinstance(evidence_index.get(cid), dict):
+            ref = evidence_index[cid]
+            _append_coordinate_mismatches(issues, f"claim_index[{index_key!r}]", coord, ref)
+        # Independently validate coordinate types (not just equality with the
+        # referenced record): two matching invalid values must still be rejected.
+        for ts_field in ("timestamp_start", "timestamp_end"):
+            for msg in _validate_optional_timestamp(coord.get(ts_field)):
+                issues.append(f"claim_index[{index_key!r}].evidence_coordinate.{ts_field} {msg}")
+        for msg in _validate_optional_string(coord.get("time_ref")):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.time_ref {msg}")
+        for msg in _validate_optional_string(coord.get("speaker")):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.speaker {msg}")
+        coord_conf = coord.get("speaker_confidence")
+        if coord_conf not in ("high", "medium", "low", "unknown"):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.speaker_confidence must be one of high/medium/low/unknown")
+        coord_mod = coord.get("modality")
+        if isinstance(coord_mod, list) and coord_mod and not all(isinstance(m, str) and m.strip() for m in coord_mod):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.modality contains an invalid entry")
+    return issues
+
+
+def _append_coordinate_mismatches(issues: list[str], prefix: str, coord: dict, ref: dict) -> None:
+    for field in ("evidence_id", "video_id", "timestamp_start", "timestamp_end", "time_ref", "speaker", "speaker_confidence", "modality"):
+        if coord.get(field) != ref.get(field):
+            issues.append(f"{prefix}: coordinate {field} differs from evidence record")
+
+
+def _validate_evidence_index(collection: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    evidence_index = collection.get("evidence_index")
+    if not isinstance(evidence_index, dict) or not evidence_index:
+        issues.append("evidence_index must be a non-empty object")
+        return issues
+    source_ids = _source_video_ids(collection)
+    for index_key, ev in evidence_index.items():
+        if not _required_nonempty_str(index_key):
+            issues.append(f"evidence_index key must be a non-empty string: {index_key!r}")
+        if not isinstance(ev, dict):
+            issues.append(f"evidence_index[{index_key!r}] is not an object")
+            continue
+        eid = ev.get("evidence_id")
+        if not _required_nonempty_str(eid):
+            issues.append(f"evidence_index[{index_key!r}]: evidence_id is empty")
+        elif _text(index_key) != _text(eid):
+            issues.append(f"evidence_index key {index_key!r} != evidence_id {eid!r}")
+        if eid in RESERVED_FALLBACK_IDS:
+            issues.append(f"evidence_index[{index_key!r}]: evidence_id uses reserved fallback id: {eid!r}")
+        owner = ev.get("video_id")
+        if not _required_nonempty_str(owner):
+            issues.append(f"evidence_index[{index_key!r}]: video_id is empty")
+        elif source_ids and _text(owner) not in source_ids:
+            issues.append(f"evidence_index[{index_key!r}]: video_id {owner!r} does not resolve to source_videos")
+        modality = _as_list(ev.get("modality"))
+        if not modality or not all(isinstance(m, str) and m.strip() for m in modality):
+            issues.append(f"evidence_index[{index_key!r}]: modality must be a non-empty list of non-empty strings")
+        elif len(modality) != len(set(modality)):
+            issues.append(f"evidence_index[{index_key!r}]: modality must contain unique strings")
+        for ts_field in ("timestamp_start", "timestamp_end"):
+            for msg in _validate_optional_timestamp(ev.get(ts_field)):
+                issues.append(f"evidence_index[{index_key!r}].{ts_field} {msg}")
+        start = ev.get("timestamp_start")
+        end = ev.get("timestamp_end")
+        if isinstance(start, (int, float)) and not isinstance(start, bool) and math.isfinite(start) and start >= 0 \
+                and isinstance(end, (int, float)) and not isinstance(end, bool) and math.isfinite(end) and end >= 0 \
+                and end < start:
+            issues.append(f"evidence_index[{index_key!r}]: timestamp_end is earlier than timestamp_start")
+        for msg in _validate_optional_string(ev.get("time_ref")):
+            issues.append(f"evidence_index[{index_key!r}].time_ref {msg}")
+        for msg in _validate_optional_string(ev.get("speaker")):
+            issues.append(f"evidence_index[{index_key!r}].speaker {msg}")
+        conf = ev.get("speaker_confidence")
+        if conf not in ("high", "medium", "low", "unknown"):
+            issues.append(f"evidence_index[{index_key!r}].speaker_confidence must be one of high/medium/low/unknown")
+    return issues
+
+
+def _validate_claim_groups(collection: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    groups = collection.get("claim_groups")
+    if not isinstance(groups, list) or not groups:
+        issues.append("claim_groups must be a non-empty list")
+        return issues
+    claim_index = collection.get("claim_index")
+    if not isinstance(claim_index, dict):
+        claim_index = {}
+    evidence_index = collection.get("evidence_index")
+    if not isinstance(evidence_index, dict):
+        evidence_index = {}
+    seen_group_ids: set[str] = set()
+    membership_count: Counter[str] = Counter()
+    covered_evidence_ids: set[str] = set()
+    for gi, group in enumerate(groups):
+        if not isinstance(group, dict):
+            issues.append(f"claim_groups[{gi}] is not an object")
+            continue
+        gid = _text(group.get("group_id"))
+        if not _required_nonempty_str(group.get("group_id")):
+            issues.append(f"claim_groups[{gi}] group_id must be a non-empty string")
+        elif gid in seen_group_ids:
+            issues.append(f"duplicate group_id: {gid}")
+        else:
+            seen_group_ids.add(gid)
+        claim_uids = [_text(u) for u in _as_list(group.get("claim_uids"))]
+        member_uids = [_text(u) for u in _as_list(group.get("member_claim_uids"))]
+        if not claim_uids:
+            issues.append(f"group {gid!r}: claim_uids must be a non-empty list")
+        if not member_uids:
+            issues.append(f"group {gid!r}: member_claim_uids must be a non-empty list")
+        if sorted(claim_uids) != sorted(member_uids):
+            issues.append(f"group {gid!r}: claim_uids and member_claim_uids differ")
+        if len(member_uids) != len(set(member_uids)):
+            issues.append(f"group {gid!r}: duplicate member claim uids")
+        for uid in list(member_uids) + [u for u in claim_uids if u not in member_uids]:
+            if uid not in claim_index:
+                issues.append(f"group {gid!r}: member claim uid does not resolve: {uid!r}")
+            membership_count[uid] += 1
+        claim_count = group.get("claim_count")
+        if isinstance(claim_count, int) and not isinstance(claim_count, bool):
+            if claim_count != len(member_uids):
+                issues.append(f"group {gid!r}: claim_count {claim_count} != member uids {len(member_uids)}")
+        else:
+            issues.append(f"group {gid!r}: claim_count must be an integer equal to the number of member uids")
+        rep = group.get("representative_claim_uid")
+        if rep is not None and (_text(rep) not in claim_index or _text(rep) not in member_uids):
+            issues.append(f"group {gid!r}: representative_claim_uid does not resolve in group")
+        evidence_ids = [_text(e) for e in _as_list(group.get("evidence_ids"))]
+        if not evidence_ids:
+            issues.append(f"group {gid!r}: evidence_ids must be a non-empty list")
+        seen_ev: set[str] = set()
+        for eid in evidence_ids:
+            if eid in seen_ev:
+                issues.append(f"group {gid!r}: duplicate evidence id: {eid!r}")
+            else:
+                seen_ev.add(eid)
+            if eid not in evidence_index:
+                issues.append(f"group {gid!r}: evidence id does not resolve: {eid!r}")
+            covered_evidence_ids.add(eid)
+        coords = group.get("evidence_coordinates")
+        if not isinstance(coords, list) or not coords:
+            issues.append(f"group {gid!r}: evidence_coordinates must be a non-empty list")
+            coords = []
+        coord_ids: set[str] = set()
+        for coord in coords:
+            if not isinstance(coord, dict):
+                issues.append(f"group {gid!r}: evidence coordinate must be an object")
+                continue
+            cid = coord.get("evidence_id")
+            if not _required_nonempty_str(cid):
+                issues.append(f"group {gid!r}: coordinate evidence_id must be a non-empty string")
+                continue
+            if cid in coord_ids:
+                issues.append(f"group {gid!r}: duplicate coordinate evidence id: {cid!r}")
+            else:
+                coord_ids.add(cid)
+            if cid not in seen_ev:
+                issues.append(f"group {gid!r}: coordinate evidence_id not listed in group evidence_ids")
+            if cid not in evidence_index:
+                issues.append(f"group {gid!r}: coordinate evidence_id does not resolve")
+            elif isinstance(evidence_index.get(cid), dict):
+                _append_coordinate_mismatches(issues, f"group {gid!r}", coord, evidence_index[cid])
+            # Independently validate each group coordinate. Matching invalid
+            # values across the group and evidence index must still fail.
+            for ts_field in ("timestamp_start", "timestamp_end"):
+                for msg in _validate_optional_timestamp(coord.get(ts_field)):
+                    issues.append(f"group {gid!r} coordinate.{ts_field} {msg}")
+            for msg in _validate_optional_string(coord.get("time_ref")):
+                issues.append(f"group {gid!r} coordinate.time_ref {msg}")
+            for msg in _validate_optional_string(coord.get("speaker")):
+                issues.append(f"group {gid!r} coordinate.speaker {msg}")
+            coord_conf = coord.get("speaker_confidence")
+            if coord_conf not in ("high", "medium", "low", "unknown"):
+                issues.append(f"group {gid!r} coordinate.speaker_confidence must be one of high/medium/low/unknown")
+            coord_modality = coord.get("modality")
+            if not isinstance(coord_modality, list) or not coord_modality or not all(
+                isinstance(item, str) and item.strip() for item in coord_modality
+            ):
+                issues.append(f"group {gid!r} coordinate.modality must be a non-empty list of non-empty strings")
+        # Every group evidence id must have a corresponding coordinate.
+        for eid in seen_ev:
+            if eid not in coord_ids:
+                issues.append(f"group {gid!r}: evidence id lacks a coordinate: {eid!r}")
+    # Every indexed claim must belong to exactly one group.
+    for uid in (claim_index or {}):
+        count = membership_count[uid]
+        if count == 0:
+            issues.append(f"claim_index uid is not covered by any claim group: {uid!r}")
+        elif count > 1:
+            issues.append(f"claim_index uid is member of more than one claim group: {uid!r} (count {count})")
+    return issues
+
+
+def _validate_terrain(collection: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    terrain = collection.get("terrain")
+    if not isinstance(terrain, dict):
+        issues.append("terrain must be an object")
+        return issues
+    group_ids = {
+        _text(g.get("group_id"))
+        for g in _as_list(collection.get("claim_groups"))
+        if isinstance(g, dict)
+    }
+    truth = terrain.get("truth_status")
+    if truth != "not_evaluated":
+        issues.append(f"terrain.truth_status must be 'not_evaluated', got {truth!r}")
+    fact = terrain.get("fact_check_status")
+    if fact != "not_performed":
+        issues.append(f"terrain.fact_check_status must be 'not_performed', got {fact!r}")
+    if not isinstance(terrain.get("operator_judgment_required"), bool):
+        issues.append("terrain.operator_judgment_required must be a boolean")
+    for key in ("repeated_claim_group_ids", "disagreement_group_ids", "outlier_group_ids"):
+        if key not in terrain:
+            issues.append(f"terrain is missing required field: {key}")
+            continue
+        value = terrain.get(key)
+        if not isinstance(value, list):
+            issues.append(f"terrain.{key} must be a list")
+            continue
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                issues.append(f"terrain.{key} item must be a non-empty string")
+                continue
+            if item in seen:
+                issues.append(f"terrain.{key} contains duplicate group id: {item!r}")
+            else:
+                seen.add(item)
+            if item not in group_ids:
+                issues.append(f"terrain.{key} references nonexistent group: {item!r}")
+    claim_index = collection.get("claim_index")
+    if not isinstance(claim_index, dict):
+        claim_index = {}
+    claim_group_members: dict[str, set[str]] = {}
+    for g in _as_list(collection.get("claim_groups")):
+        if isinstance(g, dict):
+            claim_group_members[_text(g.get("group_id"))] = set(_text(u) for u in _as_list(g.get("claim_uids")))
+    # disagreement_relations
+    relations = terrain.get("disagreement_relations")
+    if not isinstance(relations, list):
+        issues.append("terrain.disagreement_relations must be a list")
+    else:
+        seen_rid: set[str] = set()
+        for rel in relations:
+            if not isinstance(rel, dict):
+                issues.append("terrain.disagreement_relations row must be an object")
+                continue
+            rid = rel.get("relation_id")
+            if not _required_nonempty_str(rid):
+                issues.append("disagreement relation must have a non-empty relation_id")
+            elif rid in seen_rid:
+                issues.append(f"duplicate disagreement relation_id: {rid!r}")
+            else:
+                seen_rid.add(rid)
+            cgid = rel.get("claim_group_id")
+            if cgid not in group_ids:
+                issues.append(f"disagreement relation references nonexistent group: {cgid!r}")
+            relation_type = rel.get("relation_type")
+            if relation_type not in (
+                "support_vs_caution",
+                "alternative_explanation",
+                "opposing_stances_pair",
+                "numeric_mismatch",
+                "framing_conflict",
+                "unknown",
+            ):
+                issues.append(f"disagreement relation has invalid relation_type: {relation_type!r}")
+            confidence = rel.get("confidence")
+            if confidence not in ("high", "medium", "low"):
+                issues.append(f"disagreement relation has invalid confidence: {confidence!r}")
+            if not isinstance(rel.get("human_review_required"), bool):
+                issues.append("disagreement relation human_review_required must be a boolean")
+            if not isinstance(rel.get("why_flagged"), str):
+                issues.append("disagreement relation why_flagged must be a string")
+            rel_uids = _as_list(rel.get("claim_uids"))
+            if not isinstance(rel.get("claim_uids"), list):
+                issues.append("disagreement relation claim_uids must be a list")
+            for uid in rel_uids:
+                if uid not in claim_index:
+                    issues.append(f"disagreement relation references nonexistent claim uid: {uid!r}")
+                elif cgid in claim_group_members and uid not in claim_group_members[cgid]:
+                    issues.append(f"disagreement relation claim uid {uid!r} does not belong to its claim group {cgid!r}")
+    # outlier_details
+    outliers = terrain.get("outlier_details")
+    if not isinstance(outliers, list):
+        issues.append("terrain.outlier_details must be a list")
+    else:
+        for od in outliers:
+            if not isinstance(od, dict):
+                issues.append("terrain.outlier_details row must be an object")
+                continue
+            cgid = od.get("claim_group_id")
+            if cgid not in group_ids:
+                issues.append(f"outlier detail references nonexistent group: {cgid!r}")
+            outlier_type = od.get("outlier_type")
+            if outlier_type not in (
+                "single_source_outlier",
+                "low_source_diversity_outlier",
+                "semantic_outlier",
+                "high_stakes_single_source",
+            ):
+                issues.append(f"outlier detail has invalid outlier_type: {outlier_type!r}")
+            followup_priority = od.get("followup_priority")
+            if followup_priority not in ("low", "medium", "high"):
+                issues.append(f"outlier detail has invalid followup_priority: {followup_priority!r}")
+            if not isinstance(od.get("why_outlier"), str):
+                issues.append("outlier detail why_outlier must be a string")
+            od_uids = _as_list(od.get("claim_uids"))
+            if not isinstance(od.get("claim_uids"), list):
+                issues.append("outlier detail claim_uids must be a list")
+            for uid in od_uids:
+                if uid not in claim_index:
+                    issues.append(f"outlier detail references nonexistent claim uid: {uid!r}")
+                elif cgid in claim_group_members and uid not in claim_group_members[cgid]:
+                    issues.append(f"outlier detail claim uid {uid!r} does not belong to its claim group {cgid!r}")
+    # provenance / limitations
+    provenance = collection.get("provenance")
+    if provenance is not None and not isinstance(provenance, dict):
+        issues.append("provenance must be an object")
+    limitations = collection.get("limitations")
+    if not isinstance(limitations, list):
+        issues.append("limitations must be a list")
+    else:
+        for i, item in enumerate(limitations):
+            if not isinstance(item, str):
+                issues.append(f"limitations[{i}] must be a string")
+    return issues
+
+
+
 def build_topic_collection(
     records: list[dict[str, Any]],
     *,
@@ -732,20 +1561,33 @@ def build_topic_collection(
     """Build a deterministic cross-video TopicCollection from records."""
     if clusterer not in CLUSTERERS:
         raise ValueError(f"Unsupported clusterer: {clusterer!r}. Choose from {CLUSTERERS}")
+    # Fail closed before any grouping work: duplicate, empty, reserved-fallback,
+    # or dangling identifiers must never silently overwrite each other.
+    assert_topic_inputs_valid(records)
+    # Hash the ORIGINAL inputs before any transformation so the recorded hashes
+    # describe the actual inputs, never mutated copies.
+    input_record_hashes = [_stable_json_hash(r) for r in records]
+    # Work only on deep copies: clustering assigns claim_group_key /
+    # claim_group_label / normalized_tokens, and those writes must never leak
+    # back into the caller's VideoKnowledgeRecord objects.
     all_claims: list[dict[str, Any]] = []
     videos: dict[str, dict[str, Any]] = {}
     evidence_index: dict[str, dict[str, Any]] = {}
     for record in records:
         video = record.get("video") or {}
         video_id = _text(video.get("video_id"), "unknown-video")
-        videos[video_id] = video
+        videos[video_id] = copy.deepcopy(video)
         for evidence in _as_list(record.get("evidence_records")):
             if isinstance(evidence, dict):
-                evidence_index[_text(evidence.get("evidence_id"), "unknown-evidence")] = evidence
+                evidence_index[_text(evidence.get("evidence_id"), "unknown-evidence")] = copy.deepcopy(evidence)
         for claim in _as_list(record.get("claim_records")):
             if isinstance(claim, dict):
-                all_claims.append(claim)
+                all_claims.append(copy.deepcopy(claim))
 
+    if not all_claims:
+        raise InvalidInputError(
+            "no claim records were provided; refusing to build an empty TopicCollection"
+        )
     grouped = _cluster_claims(all_claims, clusterer, token_jaccard_threshold=token_jaccard_threshold)
 
     claim_groups: list[dict[str, Any]] = []
@@ -756,14 +1598,22 @@ def build_topic_collection(
     outlier_details: list[dict[str, Any]] = []
     contradiction_candidates: list[dict[str, Any]] = []
 
-    for idx, (key, claims, mean_score) in enumerate(sorted(grouped, key=lambda item: item[0]), start=1):
+    for idx, (key, claims, mean_score, min_score) in enumerate(sorted(grouped, key=lambda item: item[0]), start=1):
         group_id = f"G{idx:04d}"
         video_ids = sorted({_text(c.get("source_video_id"), "unknown-video") for c in claims})
         stances = sorted({_text(c.get("stance"), "reported_claim") for c in claims})
-        roles = sorted({_text(c.get("support_role"), "reported_context") for c in claims})
+        # Preserve role multiplicity for majority calculations: a group with one
+        # supporting and three challenging claims must NOT look like a tie.
+        role_values = [_text(c.get("support_role"), "reported_context") for c in claims]
+        roles = sorted(set(role_values))
+        support_role_counts = dict(sorted(Counter(role_values).items()))
         has_disagreement = (
             "claim_or_promotion" in stances
             and ("caution_or_counterpoint" in stances or "hypothesis_or_alternative" in stances)
+        ) or any(
+            _opposition_score(claims[i], claims[j]) >= 0.45
+            for i in range(len(claims))
+            for j in range(i + 1, len(claims))
         )
         is_repeated = len(video_ids) >= 2
         is_outlier = len(video_ids) == 1
@@ -776,8 +1626,17 @@ def build_topic_collection(
         label = _group_label(key)
         claim_uids = [_text(c.get("claim_uid"), "unknown-claim") for c in claims]
         evidence_ids: list[str] = []
+        evidence_coords: list[dict[str, Any]] = []
+        seen_coord_ids: set[str] = set()
         for c in claims:
-            evidence_ids.extend(str(e) for e in _as_list(c.get("evidence_ids")))
+            eids = [str(e) for e in _as_list(c.get("evidence_ids"))]
+            evidence_ids.extend(eids)
+            coord = c.get("evidence_coordinate")
+            if isinstance(coord, dict):
+                eid = coord.get("evidence_id")
+                if eid and eid not in seen_coord_ids:
+                    seen_coord_ids.add(eid)
+                    evidence_coords.append(coord)
         group = {
             "group_id": group_id,
             "claim_group_key": key,
@@ -787,6 +1646,7 @@ def build_topic_collection(
             "claim_count": len(claims),
             "stances": stances,
             "support_roles": roles,
+            "support_role_counts": support_role_counts,
             "status": {
                 "repeated_claim": is_repeated,
                 "disagreement_point": has_disagreement,
@@ -796,12 +1656,13 @@ def build_topic_collection(
             "member_claim_uids": claim_uids,
             "representative_claim_uid": claim_uids[0] if claim_uids else None,
             "evidence_ids": sorted(set(evidence_ids)),
-            "evidence_coordinates": sorted(set(evidence_ids)),
+            "evidence_coordinates": evidence_coords,
             "source_diversity": _source_diversity(claims),
             "grouping_method": GROUPING_METHOD["name"],
-            "grouping_confidence": "high" if mean_score >= 0.62 and is_repeated else ("medium" if is_repeated or mean_score >= 0.20 else "low"),
+            "grouping_confidence": "high" if min_score >= 0.62 and is_repeated else ("medium" if is_repeated or min_score >= 0.20 else "low"),
             "grouping_score": mean_score,
-            "why_grouped": _why_grouped(key, claims),
+            "cohesion_min_similarity": min_score,
+            "why_grouped": _why_grouped(key, claims, min_score=min_score),
             "human_review_required": bool(has_disagreement or is_outlier),
         }
         if is_outlier:
@@ -876,7 +1737,7 @@ def build_topic_collection(
             "builder": "youtube_intel.topic_collection.build_topic_collection",
             "builder_version": "v0.1",
             "created_at_utc": _now_utc(),
-            "input_record_hashes": [_stable_json_hash(r) for r in records],
+            "input_record_hashes": input_record_hashes,
             "alpha_contract_demo": True,
         },
         "limitations": TOPIC_LIMITATIONS,
@@ -886,7 +1747,114 @@ def build_topic_collection(
         "claim_groups": topic_collection["claim_groups"],
         "terrain": topic_collection["terrain"],
     })
+    # Fail closed on an internally inconsistent built collection: every group
+    # reference, coordinate, and count must hold before the document is returned.
+    output_issues = validate_topic_collection_document(topic_collection)
+    if output_issues:
+        raise EvidenceIntegrityError(
+            "built TopicCollection integrity check failed: " + "; ".join(output_issues[:8])
+            + (f" (+{len(output_issues) - 8} more)" if len(output_issues) > 8 else "")
+        )
     return topic_collection
+
+
+def validate_expected_groupings_document(data: Any, *, label: str = "expected groupings") -> list[str]:
+    """Validate a user-supplied expected_groupings.json document.
+
+    Enforces a strict fail-closed contract so the evaluator never receives
+    malformed input: ``must_link`` is REQUIRED and must be a list of exact
+    two-item lists of non-empty strings; ``cannot_link`` (when present) follows
+    the same rule; ``threshold`` (when present) must be a finite numeric value
+    within ``[0, 1]``. Booleans are rejected; NaN/Infinity are rejected via
+    ``math.isfinite``; strings are never coerced through ``float()``. Duplicate
+    pairs, contradictory pairs shared across must-link and cannot-link, and
+    same-item pairs are rejected, and unknown fields are rejected (strict
+    contract).
+    """
+    issues: list[str] = []
+    if not isinstance(data, dict):
+        return [f"{label} must be an object"]
+
+    allowed_keys = {"must_link", "cannot_link", "threshold", "schema_version", "metric"}
+    for key in data:
+        if key not in allowed_keys:
+            issues.append(f"{label} has unknown field: {key!r}")
+
+    def check_pairs(key: str) -> None:
+        if key not in data:
+            if key == "must_link":
+                issues.append(f"{label}.must_link is required")
+            return
+        value = data.get(key)
+        if value is None:
+            issues.append(f"{label}.{key} must not be null")
+            return
+        if not isinstance(value, list):
+            issues.append(f"{label}.{key} must be a list")
+            return
+        for i, row in enumerate(value):
+            if not isinstance(row, list) or len(row) != 2:
+                issues.append(f"{label}.{key}[{i}] must be a list of exactly two items")
+                continue
+            for j, item in enumerate(row):
+                if not isinstance(item, str) or not item.strip():
+                    issues.append(f"{label}.{key}[{i}][{j}] must be a non-empty string")
+
+    check_pairs("must_link")
+    check_pairs("cannot_link")
+
+    normalized_pairs = _normalize_expected_pairs(data)
+    # A link is undirected: ["a","b"] and ["b","a"] are the same pair, so both
+    # exact and reversed duplicates are rejected. Sorting gives a canonical key.
+    seen_unordered: dict[tuple[str, str], str] = {}
+    for key, left, right in normalized_pairs:
+        unordered = tuple(sorted((left, right)))
+        if left == right:
+            issues.append(f"{label}.{key} pair has the same item on both sides: {left!r}")
+        if unordered in seen_unordered:
+            issues.append(f"{label}.{key} contains duplicate pair: {list(unordered)!r}")
+        else:
+            seen_unordered[unordered] = key
+
+    must_link_sets = {tuple(sorted((l, r))) for k, l, r in normalized_pairs if k == "must_link"}
+    cannot_link_sets = {tuple(sorted((l, r))) for k, l, r in normalized_pairs if k == "cannot_link"}
+    for unordered in must_link_sets & cannot_link_sets:
+        issues.append(f"{label} contains contradictory pair in both must_link and cannot_link: {list(unordered)!r}")
+
+    threshold = data.get("threshold") if "threshold" in data else None
+    if "threshold" in data:
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            issues.append(f"{label}.threshold must be a numeric value")
+        elif not math.isfinite(threshold):
+            issues.append(f"{label}.threshold must be finite (NaN/Infinity rejected)")
+        elif not (0.0 <= threshold <= 1.0):
+            issues.append(f"{label}.threshold must satisfy 0 <= threshold <= 1")
+    return issues
+
+
+def _normalize_expected_pairs(data: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Return validated (key, left, right) triples for well-formed rows.
+
+    Returns an empty list when the document is malformed; the validator reports
+    the specific issues in that case. Only used for duplicate/contradiction
+    detection against already-validated rows.
+    """
+    out: list[tuple[str, str, str]] = []
+    for key in ("must_link", "cannot_link"):
+        rows = data.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, list) and len(row) == 2 and all(isinstance(x, str) and x.strip() for x in row):
+                out.append((key, row[0].strip(), row[1].strip()))
+    return out
+
+
+def assert_valid_expected_groupings_document(data: Any, *, label: str) -> dict[str, Any]:
+    issues = validate_expected_groupings_document(data, label=label)
+    if issues:
+        raise InvalidInputError(label + ": " + "; ".join(issues[:8]))
+    return data
 
 
 def evaluate_topic_collection(collection: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
@@ -895,7 +1863,12 @@ def evaluate_topic_collection(collection: dict[str, Any], expected: dict[str, An
     The metric is intentionally simple and local: must-link pairs should land in
     the same group, and cannot-link pairs should land in different groups. It is
     a smoke-quality signal, not a production benchmark.
+
+    Evaluation is fail-closed: the expected document is strictly validated up
+    front (assert_valid_expected_groupings_document) so malformed rows can never
+    be silently skipped or produce a score from a reduced set.
     """
+    assert_valid_expected_groupings_document(expected, label="expected groupings")
     claim_index = collection.get("claim_index") or {}
     uid_to_group: dict[str, str] = {}
     text_to_uid: dict[str, str] = {}
@@ -955,7 +1928,7 @@ def evaluate_topic_collection(collection: dict[str, Any], expected: dict[str, An
         "total": total,
         "score": score,
         "threshold": expected.get("threshold", 0.75),
-        "status": "pass" if total and score >= float(expected.get("threshold", 0.75)) else "fail",
+        "status": "pass" if total and score >= expected.get("threshold", 0.75) else "fail",
         "checks": checks,
     }
 
@@ -1204,28 +2177,72 @@ def build_topic_demo_from_segments(
     clusterer: str = "normalized",
     token_jaccard_threshold: float = 0.5,
 ) -> dict[str, Any]:
-    records: list[dict[str, Any]] = []
-    package_paths: list[str] = []
-    validation_paths: list[str] = []
-    for segments_file in sorted(topic_dir.glob("video_*.json")):
-        data = read_json(segments_file, {})
-        video = data.get("video") if isinstance(data.get("video"), dict) else {}
-        segments = data.get("segments") if isinstance(data.get("segments"), list) else []
+    topic_dir = Path(topic_dir)
+    if not topic_dir.is_dir():
+        raise InvalidInputError(f"topic directory does not exist: {topic_dir}")
+    segments_files = sorted(topic_dir.glob("video_*.json"))
+    if not segments_files:
+        raise InvalidInputError(f"no video_*.json files found in topic directory: {topic_dir}")
+
+    # Phase 1: read and validate EVERY source file strictly before writing any
+    # artifact, so a malformed later source cannot leave a half-written
+    # successful-looking output directory behind.
+    prepared: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for segments_file in segments_files:
+        data = read_required_json(segments_file, label=f"topic source file {segments_file.name}")
+        if not isinstance(data, dict):
+            raise InvalidInputError(
+                f"topic source file {segments_file.name} must be an object "
+                f"(got {type(data).__name__})"
+            )
+        video = data.get("video")
+        if not isinstance(video, dict) or not video:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video is missing or not an object")
+        video_id = _text(video.get("video_id"))
+        title = _text(video.get("title"))
+        language = _text(video.get("language"))
+        # Real source identity is never fabricated from the filename stem.
+        if not video_id:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video.video_id is empty")
+        if not title:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video.title is empty")
+        if not language:
+            raise InvalidInputError(f"topic source file {segments_file.name}: video.language is empty")
+        segments = data.get("segments")
+        if not isinstance(segments, list) or not segments:
+            raise InvalidInputError(
+                f"topic source file {segments_file.name}: segments must be a non-empty list"
+            )
+        for i, segment in enumerate(segments):
+            if not isinstance(segment, dict):
+                raise InvalidInputError(
+                    f"topic source file {segments_file.name} segment {i} is not an object "
+                    f"(got {type(segment).__name__})"
+                )
+            if not str(segment.get("text") or "").strip():
+                raise InvalidInputError(f"topic source file {segments_file.name} segment {i} has empty text")
         package = build_residual_package(
-            video_id=_text(video.get("video_id"), segments_file.stem),
-            title=_text(video.get("title"), segments_file.stem),
-            language=_text(video.get("language"), "en"),
+            video_id=video_id,
+            title=title,
+            language=language,
             duration_seconds=video.get("duration_seconds"),
             segments=segments,
             genre_override=video.get("genre"),
         )
         validation = validate_package(package).to_dict()
-        package_dict = package.to_dict()
-        pkg_path = write_json(output_dir / "packages" / f"{package.video_id}_residual_package.json", package_dict)
-        val_path = write_json(output_dir / "packages" / f"{package.video_id}_validation.json", validation)
-        package_paths.append(str(pkg_path))
-        validation_paths.append(str(val_path))
+        if validation["status"] != "pass":
+            raise InvalidInputError(
+                f"source package validation failed for {segments_file.name}: "
+                + "; ".join(validation["issues"][:8])
+            )
+        prepared.append((package.to_dict(), validation))
+
+    # Phase 2: build all records in memory.
+    records: list[dict[str, Any]] = []
+    for package_dict, _validation in prepared:
         records.append(build_video_knowledge_record(package_dict, topic_id=topic_id, topic_title=topic_title))
+    if not records:
+        raise InvalidInputError("no valid video records were produced from the topic directory")
 
     collection = build_topic_collection(
         records,
@@ -1234,10 +2251,25 @@ def build_topic_demo_from_segments(
         clusterer=clusterer,
         token_jaccard_threshold=token_jaccard_threshold,
     )
+    if not collection.get("claim_groups") or collection.get("claim_total", 0) == 0:
+        raise InvalidInputError("no claims were produced from the topic directory")
+
     expected_path = topic_dir / "expected_groupings.json"
     if expected_path.exists():
-        evaluation = evaluate_topic_collection(collection, read_json(expected_path, {}) or {})
-        collection["grouping_evaluation"] = evaluation
+        expected_data = read_required_json(expected_path, label="expected groupings")
+        expected_data = assert_valid_expected_groupings_document(
+            expected_data, label=f"expected groupings {expected_path}"
+        )
+        collection["grouping_evaluation"] = evaluate_topic_collection(collection, expected_data)
+
+    # Phase 3: write artifacts only after every source is validated.
+    package_paths: list[str] = []
+    validation_paths: list[str] = []
+    for package_dict, validation in prepared:
+        pkg_path = write_json(output_dir / "packages" / f"{_text(package_dict.get('video', {}).get('video_id'))}_residual_package.json", package_dict)
+        val_path = write_json(output_dir / "packages" / f"{_text(package_dict.get('video', {}).get('video_id'))}_validation.json", validation)
+        package_paths.append(str(pkg_path))
+        validation_paths.append(str(val_path))
     manifest = write_topic_bundle(output_dir, collection, records)
     if "grouping_evaluation" in collection:
         evaluation_path = write_json(output_dir / "grouping_evaluation.json", collection["grouping_evaluation"])

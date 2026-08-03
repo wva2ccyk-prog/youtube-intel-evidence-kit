@@ -1,0 +1,68 @@
+{
+  "ok": true,
+  "schema_version": "public_synthetic_operator_overlay.v1",
+  "topic_id": "synthetic_opinion_terrain_demo_v1",
+  "overlay_status": "CREATED_WITH_SYNTHETIC_LIMITATIONS",
+  "overlay_group_count": 4,
+  "overlay_groups": [
+    {
+      "overlay_group_id": "overlay_SYNTH_CG0001_access_and_scope",
+      "source_group_id": "SYNTH_CG0001",
+      "split_axis": "access_and_scope",
+      "claim_count": 3,
+      "cleanup_caution": false,
+      "human_review_required": true,
+      "allowed_for_model_answer": true,
+      "truth_status": "not_evaluated",
+      "fact_check_status": "not_performed"
+    },
+    {
+      "overlay_group_id": "overlay_SYNTH_CG0002_cost_and_burden",
+      "source_group_id": "SYNTH_CG0002",
+      "split_axis": "cost_and_burden",
+      "claim_count": 4,
+      "cleanup_caution": false,
+      "human_review_required": true,
+      "allowed_for_model_answer": true,
+      "truth_status": "not_evaluated",
+      "fact_check_status": "not_performed"
+    },
+    {
+      "overlay_group_id": "overlay_SYNTH_CG0003_institutional_trust",
+      "source_group_id": "SYNTH_CG0003",
+      "split_axis": "institutional_trust",
+      "claim_count": 3,
+      "cleanup_caution": false,
+      "human_review_required": true,
+      "allowed_for_model_answer": true,
+      "truth_status": "not_evaluated",
+      "fact_check_status": "not_performed"
+    },
+    {
+      "overlay_group_id": "overlay_SYNTH_CG0004_implementation_risk",
+      "source_group_id": "SYNTH_CG0004",
+      "split_axis": "implementation_risk",
+      "claim_count": 5,
+      "cleanup_caution": false,
+      "human_review_required": true,
+      "allowed_for_model_answer": true,
+      "truth_status": "not_evaluated",
+      "fact_check_status": "not_performed"
+    }
+  ],
+  "limitations": [
+    "synthetic_fixture_only",
+    "caption_fragment_claim_risk",
+    "not truth-ranked",
+    "not fact-checked"
+  ],
+  "policy": {
+    "truth_ranking_performed": false,
+    "fact_check_performed": false,
+    "conflict_relation_created": false,
+    "source_artifact_mutated": false,
+    "topic_collection_mutated": false,
+    "vkr_mutated": false,
+    "canonical_pointer_changed": false
+  }
+}

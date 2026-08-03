@@ -5,9 +5,28 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .errors import InvalidInputError
+
 
 def load_topic_collection(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """Load and fully validate a TopicCollection JSON document.
+
+    An empty object, a non-object, or a document without the TopicCollection
+    contract fields must never become a plausible topic summary through
+    default values, so the facade rejects it before any tool answers. The
+    document is validated against the dependency-free integrity validator
+    (group references, coordinate consistency, claim/evidence index integrity,
+    counts).
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    from .topic_collection import validate_topic_collection_document
+
+    issues = validate_topic_collection_document(data)
+    if issues:
+        raise InvalidInputError(
+            f"{path} is not a structurally valid TopicCollection: " + "; ".join(issues[:8])
+        )
+    return data
 
 
 def topic_summary(collection: dict[str, Any]) -> dict[str, Any]:

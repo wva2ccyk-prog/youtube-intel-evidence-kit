@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .errors import InvalidInputError
 from .io_utils import read_json, write_json, write_text
+from .package_validation import (
+    RESERVED_FALLBACK_IDS,
+    PACKAGE_SCHEMA_VERSION,
+    validate_residual_package_dict,
+)
 
 
 PUBLIC_LIMITATIONS = [
@@ -21,6 +27,205 @@ def _as_list(value: Any) -> list[Any]:
 
 def _text(value: Any, default: str = "") -> str:
     return str(value if value not in (None, "") else default)
+
+
+ANALYSIS_WORTH_SCHEMA_VERSION = "youtube_analysis_worth_v0.1"
+VALID_ANALYSIS_WORTH_VALUES = {"yes", "no", "maybe"}
+
+
+
+def _required_nonempty_str(value: Any, *, field: str, issues: list[str]) -> str | None:
+    """Return the stripped value when ``value`` is a non-empty string.
+
+    Non-string types and whitespace-only strings are reported as issues and
+    return ``None``. Never coerces via ``str()``.
+    """
+    if not isinstance(value, str):
+        issues.append(f"{field} must be a string")
+        return None
+    normalized = value.strip()
+    if not normalized:
+        issues.append(f"{field} is empty")
+        return None
+    return normalized
+
+
+def validate_analysis_worth_dict(worth: dict[str, Any]) -> list[str]:
+    """Return structural issues for an analysis-worth dictionary."""
+    issues: list[str] = []
+    if not isinstance(worth, dict):
+        return ["analysis_worth_not_object"]
+    if worth.get("schema_version") != ANALYSIS_WORTH_SCHEMA_VERSION:
+        issues.append(
+            f"analysis_worth schema_version mismatch: expected {ANALYSIS_WORTH_SCHEMA_VERSION!r}, "
+            f"got {_text(worth.get('schema_version'), '<missing>')!r}"
+        )
+    video = worth.get("video")
+    if not isinstance(video, dict) or not video:
+        issues.append("analysis_worth.video is missing or empty")
+    else:
+        _required_nonempty_str(video.get("video_id"), field="analysis_worth.video.video_id", issues=issues)
+        # A complete handoff requires a real worth title: missing titles are
+        # structural errors, never silently skipped by guarded comparisons.
+        _required_nonempty_str(video.get("title"), field="analysis_worth.video.title", issues=issues)
+    decision = worth.get("decision")
+    if not isinstance(decision, dict) or not decision:
+        issues.append("analysis_worth.decision is missing or empty")
+    else:
+        analysis_worth = decision.get("analysis_worth")
+        if analysis_worth not in VALID_ANALYSIS_WORTH_VALUES:
+            issues.append(f"analysis_worth.decision.analysis_worth invalid: {analysis_worth!r}")
+        if not _text(decision.get("recommended_route")) and not _text(decision.get("max_cost_tier")):
+            issues.append("analysis_worth.decision has neither recommended_route nor max_cost_tier")
+    if not _as_list(worth.get("source_trace")):
+        issues.append("analysis_worth.source_trace is empty (the contract requires a source trace)")
+    return issues
+
+
+def validate_handoff_inputs(
+    package: dict[str, Any] | None = None,
+    worth: dict[str, Any] | None = None,
+    overlay: dict[str, Any] | None = None,
+) -> list[str]:
+    """Validate handoff artifacts and their mutual coherence.
+
+    The complete handoff mode requires BOTH a structurally valid residual
+    package and a structurally valid analysis-worth artifact whose video
+    identity (video_id AND title) matches the package and whose source-trace
+    claim ids resolve to package claims. Source-trace rows are validated against
+    a meaningful row contract (claim_id/evidence/confidence required non-empty
+    strings; duplicate claim ids rejected; time_ref must be a string when the
+    source claim has one). Returns a list of issues (empty when coherent).
+    """
+    issues: list[str] = []
+    package = package or {}
+    worth = worth or {}
+    if not package and not worth:
+        return ["handoff requires a residual package and an analysis-worth artifact"]
+    if not isinstance(package, dict):
+        issues.append("package_not_object")
+        package = {}
+    if not isinstance(worth, dict):
+        issues.append("analysis_worth_not_object")
+        worth = {}
+    if not package:
+        issues.append("handoff requires a residual package (package-only/worth-only modes are not supported in the complete handoff contract)")
+    else:
+        package_issues = validate_residual_package_dict(package)
+        if package_issues:
+            issues.append("residual package is not structurally valid")
+            issues.extend(f"package: {issue}" for issue in package_issues[:6])
+    if not worth:
+        issues.append("handoff requires an analysis-worth artifact (package-only/worth-only modes are not supported in the complete handoff contract)")
+    else:
+        worth_issues = validate_analysis_worth_dict(worth)
+        if worth_issues:
+            issues.append("analysis-worth artifact is not structurally valid")
+            issues.extend(f"worth: {issue}" for issue in worth_issues[:6])
+    # Build a claim lookup from the package for coherence checks.
+    package_claims: dict[str, dict[str, Any]] = {}
+    for c in _as_list(package.get("claim_candidates")):
+        if isinstance(c, dict):
+            cid = _required_nonempty_str(c.get("claim_id"), field="package claim_id", issues=issues)
+            if cid:
+                package_claims[cid] = c
+    # Coherence checks only when both dicts are present.
+    if isinstance(package, dict) and isinstance(worth, dict) and package and worth:
+        package_video = package.get("video") or {}
+        worth_video = worth.get("video") or {}
+        package_vid = _required_nonempty_str(package_video.get("video_id"), field="package.video.video_id", issues=issues)
+        worth_vid = _required_nonempty_str(worth_video.get("video_id"), field="worth.video.video_id", issues=issues)
+        if package_vid is not None and worth_vid is not None and package_vid != worth_vid:
+            issues.append(f"video_id mismatch between package ({package_vid!r}) and analysis-worth ({worth_vid!r})")
+        package_title = _required_nonempty_str(package_video.get("title"), field="package.video.title", issues=issues)
+        worth_title = _required_nonempty_str(worth_video.get("title"), field="worth.video.title", issues=issues)
+        if package_title is not None and worth_title is not None and package_title != worth_title:
+            issues.append(
+                f"title mismatch between package ({package_title!r}) and analysis-worth ({worth_title!r})"
+            )
+        source_trace = _as_list(worth.get("source_trace"))
+        seen_trace_ids: set[str] = set()
+        for i, trace_item in enumerate(source_trace):
+            if not isinstance(trace_item, dict):
+                issues.append(
+                    f"analysis_worth source_trace row {i} is not an object; "
+                    f"malformed source-trace rows cannot bypass claim resolution"
+                )
+                continue
+            cid = _required_nonempty_str(trace_item.get("claim_id"), field=f"source_trace row {i} claim_id", issues=issues)
+            if cid is None:
+                continue
+            if cid not in package_claims:
+                issues.append(f"analysis_worth source_trace claim_id does not resolve: {cid!r}")
+                continue
+            if cid in seen_trace_ids:
+                issues.append(f"analysis_worth source_trace duplicate claim_id: {cid!r}")
+            seen_trace_ids.add(cid)
+            # Both the trace row and its source claim carry a complete,
+            # strictly typed semantic identity. Missing source fields must not
+            # allow a trace to invent plausible content.
+            trace_evidence = _required_nonempty_str(
+                trace_item.get("evidence"), field=f"source_trace row {i} evidence", issues=issues
+            )
+            trace_confidence = _required_nonempty_str(
+                trace_item.get("confidence"), field=f"source_trace row {i} confidence", issues=issues
+            )
+            trace_type = _required_nonempty_str(
+                trace_item.get("claim_type"), field=f"source_trace row {i} claim_type", issues=issues
+            )
+            source_claim = package_claims[cid]
+            source_type = _required_nonempty_str(
+                source_claim.get("content_type"), field=f"package claim {cid!r} content_type", issues=issues
+            )
+            source_evidence = _required_nonempty_str(
+                source_claim.get("evidence"), field=f"package claim {cid!r} evidence", issues=issues
+            )
+            source_confidence = _required_nonempty_str(
+                source_claim.get("confidence"), field=f"package claim {cid!r} confidence", issues=issues
+            )
+
+            trace_time = trace_item.get("time_ref")
+            trace_has_time = "time_ref" in trace_item
+            source_has_time = "time_ref" in source_claim
+            source_time = source_claim.get("time_ref")
+            if not source_has_time:
+                issues.append(f"package claim {cid!r} is missing time_ref")
+            elif source_time is not None and (
+                not isinstance(source_time, str) or not source_time.strip()
+            ):
+                issues.append(f"package claim {cid!r} time_ref must be a non-empty string or None")
+
+            # Exact source-trace timestamp coherence: a trace row may never
+            # invent a timestamp absent from the source claim, and when the
+            # source claim has a timestamp the trace must match it exactly.
+            if source_time is None:
+                if trace_has_time and trace_time is not None:
+                    issues.append(
+                        f"source_trace row {i} invents a time_ref absent from the source claim"
+                    )
+            else:
+                if not trace_has_time:
+                    issues.append(f"source_trace row {i} is missing time_ref")
+                elif not isinstance(trace_time, str) or not trace_time.strip():
+                    issues.append(f"source_trace row {i} time_ref must be a non-empty string")
+                elif trace_time != source_time:
+                    issues.append(
+                        f"source_trace row {i} time_ref does not match source claim"
+                    )
+
+            if source_type is not None and trace_type is not None and (
+                trace_item.get("claim_type") != source_claim.get("content_type")
+            ):
+                issues.append(f"source_trace row {i} claim_type does not match source claim")
+            if source_evidence is not None and trace_evidence is not None and (
+                trace_item.get("evidence") != source_claim.get("evidence")
+            ):
+                issues.append(f"source_trace row {i} evidence does not match source claim")
+            if source_confidence is not None and trace_confidence is not None and (
+                trace_item.get("confidence") != source_claim.get("confidence")
+            ):
+                issues.append(f"source_trace row {i} confidence does not match source claim")
+    return issues
 
 
 def _decision_label(worth: dict[str, Any]) -> str:
@@ -197,26 +402,37 @@ def write_handoff_bundle(
     out = Path(output_dir)
     package = package or {}
     worth = worth or {}
+    # Structural + coherence validation BEFORE anything is written.
+    issues = validate_handoff_inputs(package=package, worth=worth, overlay=overlay)
+    if issues:
+        raise InvalidInputError(
+            "handoff input validation failed: " + "; ".join(issues[:8])
+            + (f" (+{len(issues) - 8} more)" if len(issues) > 8 else "")
+        )
     paths: dict[str, str] = {}
 
     if package:
         paths["residual_package_json"] = str(write_json(out / "residual_package.json", package))
-    if worth:
         paths["analysis_worth_json"] = str(write_json(out / "analysis_worth.json", worth))
+    if worth:
         paths["analysis_worth_md"] = str(write_text(out / "analysis_worth.md", render_analysis_worth_markdown(worth)))
         paths["operator_summary_md"] = str(write_text(out / "operator_summary.md", render_operator_summary(package, worth)))
         paths["ai_handoff_prompt_md"] = str(write_text(out / "ai_handoff_prompt.md", render_ai_handoff_prompt(package, worth)))
     if overlay:
         paths["operator_overlay_json"] = str(write_json(out / "operator_overlay.json", overlay))
 
+    # Build the complete manifest (including its own path) BEFORE writing it,
+    # so the returned manifest and the on-disk manifest are identical.
+    manifest_path = out / "handoff_manifest.json"
+    paths["manifest_json"] = str(manifest_path)
     manifest = {
         "ok": True,
         "schema_version": "youtube_ai_handoff_bundle.v0.1",
+        "bundle_completeness": "complete",
         "limitations": PUBLIC_LIMITATIONS,
         "paths": paths,
     }
-    paths["manifest_json"] = str(write_json(out / "handoff_manifest.json", manifest))
-    manifest["paths"] = paths
+    write_json(manifest_path, manifest)
     return manifest
 
 

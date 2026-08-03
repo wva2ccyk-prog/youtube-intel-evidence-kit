@@ -28,7 +28,12 @@ Heuristics (see docs/CLAIM_ASSEMBLY.md)
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass, field
+from typing import Any
+
+from .errors import InvalidInputError
 
 __all__ = [
     "Cue",
@@ -37,6 +42,7 @@ __all__ = [
     "assemble_from_dicts",
     "is_sentence_final",
     "parse_timestamp",
+    "parse_structured_timestamp",
     "format_timestamp",
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_SPAN_SECONDS",
@@ -101,22 +107,46 @@ class Cue:
     ``index`` is the cue's position in the source cue stream; it is preserved on
     the assembled unit so traceability back to evidence records is exact.
     ``start``/``end`` are seconds (float) or None when timing is unavailable.
+    ``time_ref`` is the original display timestamp string (``mm:ss``), retained
+    for provenance even when structured start/end seconds are also present.
+
+    ``speaker`` / ``modality_source`` / ``source_hint`` carry per-cue provenance.
+    When any of these change between two consecutive cues, assembly FORCES a
+    boundary: a merged sentence must never attribute another speaker's words,
+    another modality's text, or a different evidence source to the first cue.
     """
 
     index: int
     text: str
     start: float | None = None
     end: float | None = None
+    time_ref: Any = None
+    speaker: Any = None
+    modality_source: Any = None
+    source_hint: Any = None
 
 
 @dataclass(slots=True)
 class AssembledUnit:
-    """A sentence-like unit merged from one or more consecutive cues."""
+    """A sentence-like unit merged from one or more consecutive cues.
+
+    ``speaker`` / ``modality_source`` / ``source_hint`` are the provenance of the
+    unit's cues (identical for every cue in the unit, because provenance changes
+    force boundaries). ``source_time_refs`` keeps the legacy scalar per-cue
+    timing list (start seconds only) and ``source_cue_coordinates`` keeps the
+    complete structured per-cue timing records so the merged text resolves to
+    every original timestamp.
+    """
 
     text: str
     start: float | None
     end: float | None
     cue_indices: list[int] = field(default_factory=list)
+    speaker: Any = None
+    modality_source: Any = None
+    source_hint: Any = None
+    source_time_refs: list[float | None] = field(default_factory=list)
+    source_cue_coordinates: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def span_seconds(self) -> float | None:
@@ -135,6 +165,11 @@ class AssembledUnit:
             "end": self.end,
             "cue_indices": list(self.cue_indices),
             "cue_count": len(self.cue_indices),
+            "speaker": self.speaker,
+            "modality_source": self.modality_source,
+            "source_hint": self.source_hint,
+            "source_time_refs": list(self.source_time_refs),
+            "source_cue_coordinates": [dict(c) for c in self.source_cue_coordinates],
         }
 
 
@@ -142,19 +177,63 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
+def _norm_provenance(value: Any) -> Any:
+    """Normalize a provenance value for change detection.
+
+    Missing/blank/``unknown`` values all collapse to ``None`` so that absent
+    metadata never fabricates a boundary. Two distinct non-blank values are a
+    real provenance change and force a boundary.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"unknown", "n/a", "na", "none"}:
+        return None
+    return text
+
+
+def _provenance_changed(previous: Cue, current: Cue) -> bool:
+    """True when speaker, modality, or source hint changed between cues."""
+    if _norm_provenance(previous.speaker) != _norm_provenance(current.speaker):
+        return True
+    if _norm_provenance(previous.modality_source) != _norm_provenance(current.modality_source):
+        return True
+    if _norm_provenance(previous.source_hint) != _norm_provenance(current.source_hint):
+        return True
+    return False
+
+
 def _flush(buffer: list[Cue]) -> AssembledUnit | None:
     if not buffer:
         return None
     text = _norm(" ".join(c.text for c in buffer))
     starts = [c.start for c in buffer if c.start is not None]
-    ends = [c.end for c in buffer if c.end is not None]
     start = starts[0] if starts else None
-    end = ends[-1] if ends else None
+    # span_end is the END of the final cue only. When the final cue has no end
+    # timestamp, span_end stays None: we never claim a duration through a cue
+    # whose end is unknown (no fabricated timestamps).
+    final_cue = buffer[-1]
+    end = final_cue.end
+    first = buffer[0]
+    source_cue_coordinates = [
+        {
+            "cue_index": c.index,
+            "time_ref": c.time_ref,
+            "start": c.start,
+            "end": c.end,
+        }
+        for c in buffer
+    ]
     return AssembledUnit(
         text=text,
         start=start,
         end=end,
         cue_indices=[c.index for c in buffer],
+        speaker=first.speaker,
+        modality_source=first.modality_source,
+        source_hint=first.source_hint,
+        source_time_refs=[c.start for c in buffer],
+        source_cue_coordinates=source_cue_coordinates,
     )
 
 
@@ -177,6 +256,14 @@ def assemble_sentences(
         piece = _norm(cue.text)
         if not piece:
             continue
+        # Provenance change: flush the previous buffer BEFORE the new cue is
+        # appended, so the new speaker/modality/source starts its own unit.
+        if buffer and _provenance_changed(buffer[-1], cue):
+            unit = _flush(buffer)
+            if unit is not None:
+                units.append(unit)
+            buffer = []
+            running_chars = 0
         buffer.append(cue)
         running_chars += len(piece) + (1 if len(buffer) > 1 else 0)
 
@@ -206,8 +293,13 @@ def assemble_sentences(
 
 
 def parse_timestamp(value) -> float | None:
-    """Parse a timestamp into seconds. Accepts float/int seconds or ``mm:ss`` /
-    ``hh:mm:ss`` strings. Returns None on failure."""
+    """Parse seconds or a well-formed ``mm:ss`` / ``hh:mm:ss`` timestamp.
+
+    Clock forms are strict: component signs are rejected, seconds must be less
+    than 60, and the minute component in ``hh:mm:ss`` must be less than 60.
+    ``mm:ss`` intentionally permits minutes above 59 for long-form media.
+    Returns ``None`` on failure.
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -216,16 +308,75 @@ def parse_timestamp(value) -> float | None:
     if not text:
         return None
     parts = text.split(":")
+    seconds_pattern = r"\d+(?:\.\d+)?"
     try:
         if len(parts) == 3:
-            h, m, s = parts
-            return int(h) * 3600 + int(m) * 60 + float(s)
+            hours, minutes, seconds_text = parts
+            if not hours.isdigit() or not minutes.isdigit():
+                return None
+            if re.fullmatch(seconds_pattern, seconds_text) is None:
+                return None
+            minute_value = int(minutes)
+            second_value = float(seconds_text)
+            if minute_value >= 60 or second_value >= 60:
+                return None
+            return int(hours) * 3600 + minute_value * 60 + second_value
         if len(parts) == 2:
-            m, s = parts
-            return int(m) * 60 + float(s)
-        return float(parts[0])
+            minutes, seconds_text = parts
+            if not minutes.isdigit():
+                return None
+            if re.fullmatch(seconds_pattern, seconds_text) is None:
+                return None
+            second_value = float(seconds_text)
+            if second_value >= 60:
+                return None
+            return int(minutes) * 60 + second_value
+        if len(parts) == 1:
+            return float(parts[0])
+        return None
     except (ValueError, IndexError):
         return None
+
+
+def parse_structured_timestamp(
+    value: Any,
+    *,
+    field: str,
+    allow_none: bool = True,
+) -> float | None:
+    """Strictly parse a structured timestamp into finite non-negative seconds.
+
+    Used by both cue and sentence assembly so the two modes share one strict
+    rule. Rejects booleans, NaN, +/-Infinity, negative values, and unparseable
+    strings. ``None``/blank input returns ``None`` only when ``allow_none`` is
+    true. Fractional precision is preserved; nothing is rounded.
+    """
+    if value is None:
+        if allow_none:
+            return None
+        raise InvalidInputError(f"{field} is required")
+    if isinstance(value, bool):
+        raise InvalidInputError(f"{field} must be a number or timestamp string, got a boolean")
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            if allow_none:
+                return None
+            raise InvalidInputError(f"{field} is required")
+        if text.startswith("-"):
+            raise InvalidInputError(f"{field} must be non-negative")
+        parsed = parse_timestamp(text)
+        if parsed is None:
+            raise InvalidInputError(f"{field} is not a valid timestamp: {value!r}")
+    else:
+        raise InvalidInputError(f"{field} must be a number or timestamp string, got {type(value).__name__}")
+    if not math.isfinite(parsed):
+        raise InvalidInputError(f"{field} must be finite (NaN/Infinity rejected)")
+    if parsed < 0:
+        raise InvalidInputError(f"{field} must be non-negative")
+    return parsed
 
 
 def format_timestamp(seconds: float | None, *, hms: bool = False) -> str | None:
@@ -247,22 +398,39 @@ def assemble_from_dicts(
     text_key: str = "text",
     start_key: str = "start",
     end_key: str = "end",
+    time_ref_key: str = "time_ref",
+    speaker_key: str = "speaker",
+    modality_key: str = "modality_source",
+    source_hint_key: str = "source_hint",
     max_chars: int = DEFAULT_MAX_CHARS,
     max_span_seconds: float = DEFAULT_MAX_SPAN_SECONDS,
 ) -> list[AssembledUnit]:
     """Convenience wrapper: build ``Cue``s from dict rows, then assemble.
 
     Timestamps under ``start_key``/``end_key`` may be seconds or ``mm:ss`` strings.
-    The dict's original position becomes the cue index.
+    The dict's original position becomes the cue index. Provenance fields
+    (``speaker`` / ``modality_source`` / ``source_hint``) are propagated into the
+    ``Cue`` so this entry point enforces the same speaker/modality/source
+    boundaries as the rest of the assembler; key names are configurable.
     """
     cue_objs: list[Cue] = []
     for i, row in enumerate(cues):
+        if not isinstance(row, dict):
+            raise ValueError(f"cue row {i} is not an object")
+        # Structured start wins; time_ref is the legacy fallback for start.
+        start = parse_timestamp(row.get(start_key))
+        if start is None:
+            start = parse_timestamp(row.get(time_ref_key))
         cue_objs.append(
             Cue(
                 index=i,
                 text=str(row.get(text_key, "") or ""),
-                start=parse_timestamp(row.get(start_key)),
+                start=start,
                 end=parse_timestamp(row.get(end_key)),
+                time_ref=row.get(time_ref_key),
+                speaker=row.get(speaker_key),
+                modality_source=row.get(modality_key),
+                source_hint=row.get(source_hint_key),
             )
         )
     return assemble_sentences(

@@ -1,0 +1,32 @@
+{
+  "video": {
+    "video_id": "synthetic-orchard-vendor-a",
+    "title": "Synthetic Orchard Sensor Vendor Briefing",
+    "language": "en",
+    "duration_seconds": 90,
+    "genre": "technical_fieldwork"
+  },
+  "segments": [
+    {
+      "text": "The vendor says the orchard sensor kit can cut water use by twenty percent in dry weeks.",
+      "time_ref": "00:12",
+      "speaker": "vendor_rep",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "Their case study claims a yield bump after the software started changing irrigation zones.",
+      "time_ref": "00:34",
+      "speaker": "vendor_rep",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "The dashboard map on screen is useful, but the maintenance cost is not discussed in the briefing.",
+      "time_ref": "01:02",
+      "speaker": "operator_note",
+      "source_hint": "transcript",
+      "modality_source": "mixed"
+    }
+  ]
+}

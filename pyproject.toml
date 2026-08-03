@@ -32,6 +32,9 @@ py-modules = ["youtube_ops_cli"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+youtube_intel = ["_fixtures/**/*", "_fixtures/*"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

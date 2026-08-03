@@ -19,6 +19,7 @@ def test_analysis_worth_detects_korean_markers(tmp_path: Path):
     write_json(
         package_path,
         {
+            "schema_version": "youtube_residual_v0.1",
             "video": {"video_id": "ko-demo", "title": "오늘 금리 정책과 협찬 투자문의", "language": "ko"},
             "genre": {"genre": "finance_economy", "risk_domain": "high"},
             "claim_candidates": [

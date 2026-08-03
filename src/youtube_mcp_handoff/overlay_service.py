@@ -38,6 +38,25 @@ def load_operator_overlay(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def load_validated_operator_overlay(path: str | Path) -> dict[str, Any]:
+    """Load and structurally validate an operator overlay.
+
+    Every public MCP server entry point must go through this loader so an
+    invalid overlay can never become a plausible successful tool response.
+    Raises ``InvalidInputError`` when validation fails.
+    """
+    from youtube_intel.errors import InvalidInputError
+
+    overlay = load_operator_overlay(path)
+    errors = validate_overlay_for_public_demo(overlay)
+    if errors:
+        raise InvalidInputError(
+            f"operator overlay is not valid for the public demo contract: "
+            + "; ".join(errors[:8])
+        )
+    return overlay
+
+
 def overlay_summary(overlay: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": overlay.get("ok", False),

@@ -41,6 +41,7 @@ def test_public_analysis_worth_smoke(tmp_path: Path) -> None:
     write_json(
         package_path,
         {
+            "schema_version": "youtube_residual_v0.1",
             "video": {
                 "video_id": "synthetic-field-demo",
                 "title": "Synthetic Orchard Sensor Field Notes",

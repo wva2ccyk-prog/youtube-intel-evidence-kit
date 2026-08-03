@@ -8,12 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from youtube_intel.analysis_worth import build_analysis_worth
+from youtube_intel._fixtures import fixture_exists, fixture_path, find_source_root, is_installed_package, is_source_checkout
+from youtube_intel.errors import InvalidInputError
 from youtube_intel.hesitation_markers import (
     analyze_claim_words,
     build_markers_artifact,
     render_markers_markdown,
 )
-from youtube_intel.io_utils import read_json, write_json, write_text
+from youtube_intel.io_utils import read_json, read_required_json, write_json, write_text
+from youtube_intel.package_validation import RESERVED_FALLBACK_IDS, require_nonempty_string
 from youtube_intel.reporting import write_handoff_bundle
 from youtube_intel.topic_collection import CLUSTERERS, build_topic_demo_from_segments
 from youtube_plugins.registry import check_all
@@ -35,42 +38,96 @@ def _print(data: dict[str, Any]) -> int:
 
 
 def _load_segment_input(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    data = read_json(path, {})
+    data = read_required_json(path, label="segments file")
     if isinstance(data, list):
-        return {}, data
-    if isinstance(data, dict):
+        segments = data
+        video: dict[str, Any] = {}
+    elif isinstance(data, dict):
         video = data.get("video") if isinstance(data.get("video"), dict) else {}
         segments = data.get("segments")
-        if isinstance(segments, list):
-            return video, segments
-    raise ValueError(f"segments file must be a list or an object with a segments list: {path}")
+        if not isinstance(segments, list):
+            raise InvalidInputError(
+                f"segments file {path} must contain a 'segments' list (got {type(segments).__name__})"
+            )
+    else:
+        raise InvalidInputError(
+            f"segments file {path} must be a list or an object with a segments list (got {type(data).__name__})"
+        )
+    for i, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            raise InvalidInputError(
+                f"segments file {path} segment {i} is not an object (got {type(segment).__name__})"
+            )
+    return video, segments
 
 
 def _default_demo_segments() -> Path:
-    return _repo_root() / "examples" / "synthetic_segments.json"
+    return fixture_path("synthetic_segments.json")
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    root = _repo_root()
-    gitignore = (root / ".gitignore").read_text(encoding="utf-8") if (root / ".gitignore").exists() else ""
-    required_ignores = ["outputs/", "pilot_[r]uns/", "codex_state/", ".youtube_intel/", "*.db", "*.log"]
-    ignore_status = {pattern: (pattern in gitignore) for pattern in required_ignores}
-    demo_available = _default_demo_segments().exists() and (root / "examples" / "synthetic_package.json").exists()
-    topic_demo_available = (root / "examples" / "topic_demo").is_dir()
-    leak_scan_available = (root / "scripts" / "public_release_leak_scan.py").exists()
+    root = find_source_root()
+    runtime_mode = (
+        "source_checkout" if is_source_checkout()
+        else "installed_package" if is_installed_package()
+        else "missing_resources"
+    )
+    checks: dict[str, Any] = {}
+
+    # runtime_resources: source fixtures must exist in source mode; packaged
+    # fixtures must exist in installed mode; missing-resource mode always fails.
+    if runtime_mode == "missing_resources":
+        checks["runtime_resources"] = {
+            "ok": False,
+            "message": "no source checkout marker and no packaged fixtures are accessible",
+        }
+    else:
+        demo_ok = fixture_path("synthetic_segments.json").exists() and fixture_path("synthetic_package.json").exists()
+        topic_ok = fixture_path("topic_demo").is_dir()
+        hz_ok = fixture_path("synthetic_hesitation.json").exists()
+        checks["runtime_resources"] = {
+            "ok": demo_ok and topic_ok and hz_ok,
+            "message": (
+                "resources present"
+                if (demo_ok and topic_ok and hz_ok)
+                else "one or more required fixtures are missing"
+            ),
+        }
+        checks["synthetic_demo"] = {"ok": demo_ok}
+        checks["topic_demo"] = {"ok": topic_ok}
+
+    # gitignore_safety / repository-only checks apply only in source mode.
+    if runtime_mode == "source_checkout":
+        assert root is not None
+        gitignore = (root / ".gitignore").read_text(encoding="utf-8") if (root / ".gitignore").exists() else ""
+        required_ignores = ["outputs/", "pilot_[r]uns/", "codex_state/", ".youtube_intel/", "*.db", "*.log"]
+        ignore_status = {pattern: (pattern in gitignore) for pattern in required_ignores}
+        missing_ignores = [p for p, ok in ignore_status.items() if not ok]
+        script_ok = (root / "scripts" / "public_release_leak_scan.py").exists()
+        checks["gitignore_safety"] = {
+            "ok": not missing_ignores,
+            "missing": missing_ignores,
+        }
+        checks["repository_safety_scripts"] = {
+            "ok": script_ok,
+            "message": "leak scan script present" if script_ok else "leak scan script missing",
+        }
+    else:
+        checks["gitignore_safety"] = {"ok": True, "not_applicable": True}
+        checks["repository_safety_scripts"] = {"ok": True, "not_applicable": True}
+
+    all_ok = all(c.get("ok") is True for c in checks.values())
     result = {
-        "ok": True,
+        "ok": all_ok,
         "schema_version": "youtube_intel_doctor.v0.1",
+        "checks": checks,
         "core": {
             "python": sys.version.split()[0],
-            "repo_root": str(root),
-            "synthetic_demo_available": demo_available,
-            "synthetic_topic_demo_available": topic_demo_available,
-            "leak_scan_script_available": leak_scan_available,
-        },
-        "safety": {
-            "gitignore_patterns": ignore_status,
-            "all_required_ignores_present": all(ignore_status.values()),
+            "repo_root": str(root) if root else None,
+            "runtime_mode": runtime_mode,
+            "synthetic_demo_available": checks.get("synthetic_demo", {}).get("ok", False),
+            "synthetic_topic_demo_available": checks.get("topic_demo", {}).get("ok", False),
+            "repository_only_checks_applicable": runtime_mode == "source_checkout",
         },
         "optional_plugins": check_all(),
         "project_identity": "alpha_cross_video_evidence_contract",
@@ -86,10 +143,31 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_package(args: argparse.Namespace) -> int:
     video, segments = _load_segment_input(Path(args.segments))
+    if not segments:
+        raise InvalidInputError(
+            f"segments file {args.segments} has no segments; refusing to build an empty package"
+        )
+    # The general package command must never fabricate a synthetic identity:
+    # video_id and title must come from --video-id/--title or the input file.
+    # Identity values must be real strings (never coerced via str()).
+    video_id = require_nonempty_string(
+        args.video_id if args.video_id is not None else video.get("video_id"),
+        field="video_id",
+    )
+    if video_id in RESERVED_FALLBACK_IDS:
+        raise InvalidInputError(f"video_id uses reserved fallback id: {video_id!r}")
+    title = require_nonempty_string(
+        args.title if args.title is not None else video.get("title"),
+        field="title",
+    )
+    language = require_nonempty_string(
+        args.language if args.language is not None else video.get("language"),
+        field="language",
+    )
     package = build_residual_package(
-        video_id=args.video_id or video.get("video_id") or "synthetic-field-demo",
-        title=args.title or video.get("title") or "Synthetic Orchard Sensor Field Notes",
-        language=args.language or video.get("language") or "en",
+        video_id=video_id,
+        title=title,
+        language=language,
         segments=segments,
         duration_seconds=args.duration_seconds or video.get("duration_seconds"),
         genre_override=args.genre,
@@ -108,6 +186,10 @@ def cmd_package(args: argparse.Namespace) -> int:
 
 
 def cmd_worth(args: argparse.Namespace) -> int:
+    # Validate a user-supplied --package before handing it to build_analysis_worth
+    # so a missing file or invalid JSON fails closed instead of a traceback.
+    if args.package:
+        read_required_json(Path(args.package), label="package file")
     result = build_analysis_worth(
         package_path=args.package,
         run_dir=args.run_dir,
@@ -122,13 +204,25 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     worth: dict[str, Any] = {}
     overlay: dict[str, Any] = {}
     if args.package:
-        package = read_json(Path(args.package), {}) or {}
+        package = read_required_json(Path(args.package), label="package file")
+        if not isinstance(package, dict):
+            raise InvalidInputError(
+                f"package file {args.package} must be an object (got {type(package).__name__})"
+            )
     if args.analysis_worth:
-        worth = read_json(Path(args.analysis_worth), {}) or {}
+        worth = read_required_json(Path(args.analysis_worth), label="analysis-worth file")
+        if not isinstance(worth, dict):
+            raise InvalidInputError(
+                f"analysis-worth file {args.analysis_worth} must be an object (got {type(worth).__name__})"
+            )
     elif args.package:
         worth = build_analysis_worth(package_path=args.package)
     if args.overlay:
-        overlay = read_json(Path(args.overlay), {}) or {}
+        overlay = read_required_json(Path(args.overlay), label="overlay file")
+        if not isinstance(overlay, dict):
+            raise InvalidInputError(
+                f"overlay file {args.overlay} must be an object (got {type(overlay).__name__})"
+            )
     manifest = write_handoff_bundle(args.out, package=package, worth=worth, overlay=overlay)
     return _print(manifest)
 
@@ -153,7 +247,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     residual_path = write_json(package_dir / "residual_package.json", package_dict)
     validation_path = write_json(package_dir / "validation.json", validation)
     worth = build_analysis_worth(package_path=residual_path, output_dir=worth_dir)
-    overlay_path = _repo_root() / "examples" / "synthetic_overlay_demo" / "operator_overlay.json"
+    overlay_path = fixture_path("operator_overlay.json")
     overlay = read_json(overlay_path, {}) if overlay_path.exists() else {}
     manifest = write_handoff_bundle(handoff_dir, package=package_dict, worth=worth, overlay=overlay)
     result = {
@@ -175,8 +269,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 
 def cmd_topic_demo(args: argparse.Namespace) -> int:
-    root = _repo_root()
-    topic_dir = Path(args.topic_dir) if args.topic_dir else root / "examples" / "topic_demo"
+    topic_dir = Path(args.topic_dir) if args.topic_dir else fixture_path("topic_demo")
     manifest = build_topic_demo_from_segments(
         topic_dir,
         topic_id=args.topic_id,
@@ -197,19 +290,51 @@ def cmd_hesitation_demo(args: argparse.Namespace) -> int:
     not a default) over an operator-selected claim span; see
     docs/HESITATION_MARKERS.md.
     """
-    fixture = Path(args.fixture) if args.fixture else _repo_root() / "examples" / "synthetic_hesitation.json"
-    data = read_json(fixture, {})
-    claims = data.get("claims", []) if isinstance(data, dict) else []
-    rows = [
-        analyze_claim_words(
-            c.get("claim_id", f"C{i:03d}"),
-            c.get("words", []),
-            expected_text=c.get("expected_text"),
-            span_start=c.get("span_start"),
-            span_end=c.get("span_end"),
+    fixture = Path(args.fixture) if args.fixture else fixture_path("synthetic_hesitation.json")
+    data = read_required_json(fixture, label="hesitation fixture")
+    if not isinstance(data, dict):
+        raise InvalidInputError(
+            f"hesitation fixture {fixture} must be an object with a claims list (got {type(data).__name__})"
         )
-        for i, c in enumerate(claims, start=1)
-    ]
+    claims = data.get("claims")
+    if not isinstance(claims, list) or not claims:
+        raise InvalidInputError(
+            f"hesitation fixture {fixture} is missing, empty, or malformed "
+            f"(expected an object with a non-empty claims list)"
+        )
+    rows = []
+    for i, c in enumerate(claims, start=1):
+        if not isinstance(c, dict):
+            raise InvalidInputError(
+                f"hesitation fixture {fixture} claim row {i} is not an object (got {type(c).__name__})"
+            )
+        words = c.get("words", [])
+        if not isinstance(words, list):
+            raise InvalidInputError(
+                f"hesitation fixture {fixture} claim row {i} 'words' is not a list (got {type(words).__name__})"
+            )
+        for wi, w in enumerate(words):
+            if not isinstance(w, dict):
+                raise InvalidInputError(
+                    f"hesitation fixture {fixture} claim row {i} word row {wi} is not an object "
+                    f"(got {type(w).__name__}); non-dictionary word rows are rejected "
+                    f"(malformed timestamp dictionaries are reported as malformed rows)"
+                )
+        rows.append(
+            analyze_claim_words(
+                c.get("claim_id", f"C{i:03d}"),
+                words,
+                expected_text=c.get("expected_text"),
+                span_start=c.get("span_start"),
+                span_end=c.get("span_end"),
+            )
+        )
+    if all(row["word_count"] == 0 for row in rows):
+        raise InvalidInputError(
+            f"no valid word-timestamp rows remain in hesitation fixture {fixture}: "
+            f"every claim is invalid (missing, non-numeric, negative, reversed, "
+            f"or zero-duration timestamps)"
+        )
     artifact = build_markers_artifact(
         rows,
         provenance={"source": "synthetic_fixture", "fixture": str(fixture), "backend": "none_synthetic"},
@@ -230,18 +355,113 @@ def cmd_check_plugins(args: argparse.Namespace) -> int:
     return _print({"ok": True, "optional_plugins": check_all()})
 
 
-def cmd_clean(args: argparse.Namespace) -> int:
-    targets = [Path(p) for p in args.path]
-    removed: list[str] = []
-    for target in targets:
-        if not target.exists():
+GENERATED_DIR_NAMES = {"outputs", "pilot_runs", "codex_state", ".youtube_intel"}
+GENERATED_FILE_SUFFIXES = {".db", ".log"}
+# Protected source directories that must never be deleted, even with --force.
+PROTECTED_DIR_NAMES = {"src", ".git", "tests", "schemas", ".github", "docs", "scripts"}
+
+
+def _clean_plan(
+    targets: list[str],
+    *,
+    repo_root: Path,
+    force: bool = False,
+) -> tuple[list[Path], list[Path], list[str]]:
+    """Resolve every target and return ``(allowed, missing, refusals)``.
+
+    Every path is resolved (symlinks followed) BEFORE any deletion decision.
+    Filesystem root, user home, the repository root itself, and any path
+    outside the repository are always refused. Only recognized generated-output
+    locations are deletable; ``force`` is retained only for API compatibility
+    and NEVER widens the deletion set, so arbitrary repository content cannot be
+    removed even with ``--force``. Protected source directories (``src``,
+    ``.git``, ``tests``, ``schemas``, ``.github``, ``docs``, ``scripts``) are
+    always refused. Any refusal means the caller must fail closed and delete
+    nothing.
+    """
+    root = repo_root.resolve()
+    home = Path.home().resolve()
+    allowed: list[Path] = []
+    missing: list[Path] = []
+    refusals: list[str] = []
+    for raw in targets:
+        raw_path = Path(raw)
+        if not raw_path.exists() and not raw_path.is_symlink():
+            missing.append(raw_path)
             continue
-        if target.is_dir():
+        target = raw_path.resolve()
+        if target == Path("/"):
+            refusals.append(f"refusing to delete filesystem root: {raw!r}")
+            continue
+        if target == home:
+            refusals.append(f"refusing to delete user home: {raw!r}")
+            continue
+        if target == root:
+            refusals.append(f"refusing to delete repository root: {root}")
+            continue
+        if root not in target.parents:
+            refusals.append(f"refusing to delete path outside the repository: {raw!r} -> {target}")
+            continue
+        rel = target.relative_to(root)
+        first = rel.parts[0]
+        if first in PROTECTED_DIR_NAMES:
+            refusals.append(
+                f"refusing to delete protected source directory: {raw!r} -> {target} "
+                f"(protected: {first}/)"
+            )
+            continue
+        is_generated = (
+            first in GENERATED_DIR_NAMES
+            or (len(rel.parts) == 1 and target.suffix.lower() in GENERATED_FILE_SUFFIXES)
+        )
+        if not is_generated:
+            # Non-generated repository content is never deletable, even with
+            # --force, so clean cannot remove arbitrary repository content.
+            refusals.append(
+                f"refusing to delete non-generated path: {raw!r} -> {target} "
+                f"(clean only removes generated-output locations)"
+            )
+            continue
+        allowed.append(target)
+    return allowed, missing, refusals
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    # clean is a source-workspace maintenance command. It must never operate
+    # from an installed wheel, where the module location is inside site-packages
+    # and must not be treated as a deletion boundary.
+    root = find_source_root()
+    if root is None:
+        return _print({
+            "ok": False,
+            "error": "InvalidInputError",
+            "message": "clean is available only from a detected source checkout",
+        })
+    allowed, missing, refusals = _clean_plan(args.path, repo_root=root)
+    if refusals:
+        # Fail closed: a dangerous or unauthorized target means NOTHING is
+        # deleted, and the refusal is returned as structured JSON.
+        return _print({
+            "ok": False,
+            "error": "UnsafeCleanTargetError",
+            "message": "refusing to delete dangerous or unauthorized paths",
+            "refusals": refusals,
+        })
+    if args.dry_run:
+        return _print({
+            "ok": True,
+            "dry_run": True,
+            "would_remove": [str(p) for p in allowed],
+            "missing": [str(p) for p in missing],
+        })
+    removed: list[str] = []
+    for target in allowed:
+        if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         else:
             target.unlink()
         removed.append(str(target))
-    return _print({"ok": True, "removed": removed})
+    return _print({"ok": True, "removed": removed, "missing": [str(p) for p in missing]})
 
 
 def cmd_mcp_stdio(args: argparse.Namespace) -> int:
@@ -321,8 +541,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check-plugins", help="Print optional plugin status.")
     p.set_defaults(func=cmd_check_plugins)
 
-    p = sub.add_parser("clean", help="Remove generated output paths.")
+    p = sub.add_parser("clean", help="Remove generated output paths (source-checkout only and fail-closed by default).")
     p.add_argument("path", nargs="+", default=["outputs/demo"])
+    p.add_argument("--dry-run", action="store_true", help="Report what would be removed without deleting anything.")
     p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("mcp-stdio", help="Run the read-only synthetic overlay MCP-style JSON-RPC stdio smoke server.")
@@ -338,7 +559,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except InvalidInputError as exc:
+        # Expected input failures (missing, empty, malformed, inconsistent)
+        # render as structured JSON with exit code 2 -- never a traceback and
+        # never a misleading ok:true artifact. Programming errors are not
+        # caught here.
+        return _print({"ok": False, "error": "InvalidInputError", "message": str(exc)})
 
 
 if __name__ == "__main__":
