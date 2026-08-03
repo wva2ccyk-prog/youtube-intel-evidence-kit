@@ -65,7 +65,7 @@ def _record(claims: list[dict], video_ids: list[str]) -> list[dict]:
                 "confidence": "medium",
             })
         records.append({
-            "video": {"video_id": vid},
+            "video": {"video_id": vid, "title": "T", "role_in_topic": "source", "transcript_source": "caption", "transcript_quality": "high"},
             "claim_records": claim_records,
             "evidence_records": evidence_records,
         })

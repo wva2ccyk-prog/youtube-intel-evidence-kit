@@ -45,7 +45,7 @@ def _record(video_id: str, roles: list[str]) -> dict:
         })
     return {
         "schema_version": "youtube_video_knowledge_record.v0.1",
-        "video": {"video_id": video_id, "title": "T", "language": "en"},
+        "video": {"video_id": video_id, "title": "T", "language": "en", "role_in_topic": "source", "transcript_source": "caption", "transcript_quality": "high"},
         "claim_records": claims,
         "evidence_records": [
             {

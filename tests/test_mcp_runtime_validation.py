@@ -352,3 +352,183 @@ def test_mcp_rejects_outlier_dangling_group_id(tmp_path) -> None:
 def test_mcp_accepts_valid_generated_collection_still(tmp_path) -> None:
     from youtube_intel.topic_collection import validate_topic_collection_document
     assert validate_topic_collection_document(_build_valid_collection(tmp_path)) == []
+
+
+# --- Fourth pass: Section 5.9 public-loader mutation coverage -----------------
+
+
+def test_mcp_rejects_missing_source_video_title(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(
+        tmp_path, lambda c: c["source_videos"][0].pop("title")
+    )
+
+
+def test_mcp_rejects_missing_source_video_role(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(
+        tmp_path, lambda c: c["source_videos"][0].pop("role_in_topic")
+    )
+
+
+def test_mcp_rejects_missing_transcript_source(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(
+        tmp_path, lambda c: c["source_videos"][0].pop("transcript_source")
+    )
+
+
+def test_mcp_rejects_missing_transcript_quality(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(
+        tmp_path, lambda c: c["source_videos"][0].pop("transcript_quality")
+    )
+
+
+def test_mcp_rejects_evidence_timestamp_string(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["timestamp_start"] = "banana"
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_evidence_timestamp_nan(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["timestamp_start"] = float("nan")
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_evidence_timestamp_infinity(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["timestamp_end"] = float("inf")
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_evidence_timestamp_boolean(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["timestamp_start"] = True
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_evidence_timestamp_negative(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["timestamp_start"] = -1.0
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_evidence_end_before_start(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["timestamp_start"] = 5.0
+        c["evidence_index"][eid]["timestamp_end"] = 2.0
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"][uid]["evidence_coordinate"]["timestamp_start"] = 5.0
+        c["claim_index"][uid]["evidence_coordinate"]["timestamp_end"] = 2.0
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_numeric_time_ref(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["time_ref"] = 42
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_invalid_speaker_type(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["speaker"] = 123
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_invalid_confidence_enum(tmp_path) -> None:
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["speaker_confidence"] = "sorta"
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_identical_invalid_values_across_layers(tmp_path) -> None:
+    # The same invalid timestamp is set in evidence, claim coordinate, and group
+    # coordinate. Equality alone must not make the pair valid; independent type
+    # validation must reject it.
+    def _mutate(c):
+        eid = next(iter(c["evidence_index"]))
+        c["evidence_index"][eid]["timestamp_start"] = False
+        uid = next(iter(c["claim_index"]))
+        c["claim_index"][uid]["evidence_coordinate"]["timestamp_start"] = False
+        for group in c["claim_groups"]:
+            for coord in group["evidence_coordinates"]:
+                if coord["evidence_id"] == eid:
+                    coord["timestamp_start"] = False
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_claim_in_two_groups(tmp_path) -> None:
+    def _mutate(c):
+        if len(c["claim_groups"]) >= 2:
+            uid = c["claim_groups"][0]["claim_uids"][0]
+            c["claim_groups"][1]["claim_uids"].append(uid)
+            c["claim_groups"][1]["member_claim_uids"].append(uid)
+            c["claim_groups"][1]["claim_count"] = len(c["claim_groups"][1]["member_claim_uids"])
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_malformed_terrain_list_type(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(
+        tmp_path, lambda c: c["terrain"].update(repeated_claim_group_ids="not-a-list")
+    )
+
+
+def test_mcp_rejects_missing_terrain_list(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(
+        tmp_path, lambda c: c["terrain"].pop("repeated_claim_group_ids")
+    )
+
+
+def test_mcp_rejects_duplicate_terrain_group_id(tmp_path) -> None:
+    def _mutate(c):
+        if c["terrain"]["repeated_claim_group_ids"]:
+            gid = c["terrain"]["repeated_claim_group_ids"][0]
+            c["terrain"]["repeated_claim_group_ids"].append(gid)
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_duplicate_relation_id(tmp_path) -> None:
+    def _mutate(c):
+        if c["terrain"]["disagreement_relations"]:
+            rid = c["terrain"]["disagreement_relations"][0]["relation_id"]
+            c["terrain"]["disagreement_relations"].append(
+                dict(c["terrain"]["disagreement_relations"][0], relation_id=rid)
+            )
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_relation_claim_outside_group(tmp_path) -> None:
+    def _mutate(c):
+        if len(c["claim_groups"]) >= 2:
+            other_uid = c["claim_groups"][1]["claim_uids"][0]
+            rel = c["terrain"]["disagreement_relations"][0]
+            rel["claim_uids"].append(other_uid)
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_outlier_claim_outside_group(tmp_path) -> None:
+    def _mutate(c):
+        if len(c["claim_groups"]) >= 2:
+            other_uid = c["claim_groups"][1]["claim_uids"][0]
+            od = c["terrain"]["outlier_details"][0]
+            od["claim_uids"].append(other_uid)
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_limitations_invalid_item_type(tmp_path) -> None:
+    def _mutate(c):
+        c["limitations"].append(123)
+    _mutate_and_assert_loader_rejects(tmp_path, _mutate)
+
+
+def test_mcp_rejects_limitations_wrong_type(tmp_path) -> None:
+    _mutate_and_assert_loader_rejects(
+        tmp_path, lambda c: c.update(limitations="not-a-list")
+    )

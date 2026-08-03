@@ -123,7 +123,7 @@ def _evidence(video_id: str, cid: str, text: str) -> dict:
 def _two_video_records() -> list[dict]:
     return [
         {
-            "video": {"video_id": "v1"},
+            "video": {"video_id": "v1", "title": "T", "role_in_topic": "source", "transcript_source": "caption", "transcript_quality": "high"},
             "claim_records": [
                 _claim(
                     "v1", "c1",
@@ -136,7 +136,7 @@ def _two_video_records() -> list[dict]:
             ],
         },
         {
-            "video": {"video_id": "v2"},
+            "video": {"video_id": "v2", "title": "T", "role_in_topic": "source", "transcript_source": "caption", "transcript_quality": "high"},
             "claim_records": [
                 _claim(
                     "v2", "c1",

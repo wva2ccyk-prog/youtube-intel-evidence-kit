@@ -1082,6 +1082,34 @@ def _required_nonempty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _validate_optional_timestamp(value: Any) -> list[str]:
+    """Validate a timestamp as None or a finite non-negative number.
+
+    Booleans are rejected (they are not numbers), NaN/Infinity are rejected via
+    ``math.isfinite``, and negative seconds are rejected. Empty strings are not
+    treated as timestamps.
+    """
+    if value is None:
+        return []
+    if isinstance(value, bool):
+        return ["must be a number or None (booleans are not timestamps)"]
+    if not isinstance(value, (int, float)):
+        return ["must be a number or None"]
+    if not math.isfinite(value):
+        return ["must be finite (NaN/Infinity rejected)"]
+    if value < 0:
+        return ["must be non-negative"]
+    return []
+
+
+def _validate_optional_string(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, str):
+        return ["must be a string or None"]
+    return []
+
+
 def _validate_source_videos(collection: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     source_videos = collection.get("source_videos")
@@ -1103,7 +1131,9 @@ def _validate_source_videos(collection: dict[str, Any]) -> list[str]:
         else:
             seen.add(video_id)
         for field in ("title", "role_in_topic", "transcript_source", "transcript_quality"):
-            if field in v and not isinstance(v[field], str):
+            if field not in v:
+                issues.append(f"source_videos[{i}] is missing required field: {field}")
+            elif not isinstance(v[field], str):
                 issues.append(f"source_videos[{i}].{field} must be a string")
     return issues
 
@@ -1192,6 +1222,21 @@ def _validate_claim_index(collection: dict[str, Any]) -> list[str]:
         elif isinstance(evidence_index.get(cid), dict):
             ref = evidence_index[cid]
             _append_coordinate_mismatches(issues, f"claim_index[{index_key!r}]", coord, ref)
+        # Independently validate coordinate types (not just equality with the
+        # referenced record): two matching invalid values must still be rejected.
+        for ts_field in ("timestamp_start", "timestamp_end"):
+            for msg in _validate_optional_timestamp(coord.get(ts_field)):
+                issues.append(f"claim_index[{index_key!r}].evidence_coordinate.{ts_field} {msg}")
+        for msg in _validate_optional_string(coord.get("time_ref")):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.time_ref {msg}")
+        for msg in _validate_optional_string(coord.get("speaker")):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.speaker {msg}")
+        coord_conf = coord.get("speaker_confidence")
+        if coord_conf is not None and coord_conf not in ("high", "medium", "low", "unknown"):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.speaker_confidence must be one of high/medium/low/unknown or None")
+        coord_mod = coord.get("modality")
+        if isinstance(coord_mod, list) and coord_mod and not all(isinstance(m, str) and m.strip() for m in coord_mod):
+            issues.append(f"claim_index[{index_key!r}].evidence_coordinate.modality contains an invalid entry")
     return issues
 
 
@@ -1229,6 +1274,24 @@ def _validate_evidence_index(collection: dict[str, Any]) -> list[str]:
         modality = _as_list(ev.get("modality"))
         if not modality or not all(isinstance(m, str) and m.strip() for m in modality):
             issues.append(f"evidence_index[{index_key!r}]: modality must be a non-empty list of non-empty strings")
+        elif len(modality) != len(set(modality)):
+            issues.append(f"evidence_index[{index_key!r}]: modality must contain unique strings")
+        for ts_field in ("timestamp_start", "timestamp_end"):
+            for msg in _validate_optional_timestamp(ev.get(ts_field)):
+                issues.append(f"evidence_index[{index_key!r}].{ts_field} {msg}")
+        start = ev.get("timestamp_start")
+        end = ev.get("timestamp_end")
+        if isinstance(start, (int, float)) and not isinstance(start, bool) and math.isfinite(start) and start >= 0 \
+                and isinstance(end, (int, float)) and not isinstance(end, bool) and math.isfinite(end) and end >= 0 \
+                and end < start:
+            issues.append(f"evidence_index[{index_key!r}]: timestamp_end is earlier than timestamp_start")
+        for msg in _validate_optional_string(ev.get("time_ref")):
+            issues.append(f"evidence_index[{index_key!r}].time_ref {msg}")
+        for msg in _validate_optional_string(ev.get("speaker")):
+            issues.append(f"evidence_index[{index_key!r}].speaker {msg}")
+        conf = ev.get("speaker_confidence")
+        if conf is not None and conf not in ("high", "medium", "low", "unknown"):
+            issues.append(f"evidence_index[{index_key!r}].speaker_confidence must be one of high/medium/low/unknown or None")
     return issues
 
 
@@ -1245,7 +1308,7 @@ def _validate_claim_groups(collection: dict[str, Any]) -> list[str]:
     if not isinstance(evidence_index, dict):
         evidence_index = {}
     seen_group_ids: set[str] = set()
-    grouped_claim_uids: set[str] = set()
+    membership_count: Counter[str] = Counter()
     covered_evidence_ids: set[str] = set()
     for gi, group in enumerate(groups):
         if not isinstance(group, dict):
@@ -1271,7 +1334,7 @@ def _validate_claim_groups(collection: dict[str, Any]) -> list[str]:
         for uid in list(member_uids) + [u for u in claim_uids if u not in member_uids]:
             if uid not in claim_index:
                 issues.append(f"group {gid!r}: member claim uid does not resolve: {uid!r}")
-            grouped_claim_uids.add(uid)
+            membership_count[uid] += 1
         claim_count = group.get("claim_count")
         if isinstance(claim_count, int) and not isinstance(claim_count, bool):
             if claim_count != len(member_uids):
@@ -1322,8 +1385,11 @@ def _validate_claim_groups(collection: dict[str, Any]) -> list[str]:
                 issues.append(f"group {gid!r}: evidence id lacks a coordinate: {eid!r}")
     # Every indexed claim must belong to exactly one group.
     for uid in (claim_index or {}):
-        if uid not in grouped_claim_uids:
+        count = membership_count[uid]
+        if count == 0:
             issues.append(f"claim_index uid is not covered by any claim group: {uid!r}")
+        elif count > 1:
+            issues.append(f"claim_index uid is member of more than one claim group: {uid!r} (count {count})")
     return issues
 
 
@@ -1345,35 +1411,90 @@ def _validate_terrain(collection: dict[str, Any]) -> list[str]:
     if fact != "not_performed":
         issues.append(f"terrain.fact_check_status must be 'not_performed', got {fact!r}")
     for key in ("repeated_claim_group_ids", "disagreement_group_ids", "outlier_group_ids"):
-        for gid in _as_list(terrain.get(key)):
-            if gid not in group_ids:
-                issues.append(f"terrain.{key} references nonexistent group: {gid!r}")
+        if key not in terrain:
+            issues.append(f"terrain is missing required field: {key}")
+            continue
+        value = terrain.get(key)
+        if not isinstance(value, list):
+            issues.append(f"terrain.{key} must be a list")
+            continue
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                issues.append(f"terrain.{key} item must be a non-empty string")
+                continue
+            if item in seen:
+                issues.append(f"terrain.{key} contains duplicate group id: {item!r}")
+            else:
+                seen.add(item)
+            if item not in group_ids:
+                issues.append(f"terrain.{key} references nonexistent group: {item!r}")
     claim_index = collection.get("claim_index")
     if not isinstance(claim_index, dict):
         claim_index = {}
-    for rel in _as_list(terrain.get("disagreement_relations")):
-        if not isinstance(rel, dict):
-            issues.append("terrain.disagreement_relations row must be an object")
-            continue
-        rid = rel.get("relation_id")
-        if not _required_nonempty_str(rid):
-            issues.append("disagreement relation must have a non-empty relation_id")
-        cgid = rel.get("claim_group_id")
-        if cgid not in group_ids:
-            issues.append(f"disagreement relation references nonexistent group: {cgid!r}")
-        for uid in _as_list(rel.get("claim_uids")):
-            if uid not in claim_index:
-                issues.append(f"disagreement relation references nonexistent claim uid: {uid!r}")
-    for od in _as_list(terrain.get("outlier_details")):
-        if not isinstance(od, dict):
-            issues.append("terrain.outlier_details row must be an object")
-            continue
-        cgid = od.get("claim_group_id")
-        if cgid not in group_ids:
-            issues.append(f"outlier detail references nonexistent group: {cgid!r}")
-        for uid in _as_list(od.get("claim_uids")):
-            if uid not in claim_index:
-                issues.append(f"outlier detail references nonexistent claim uid: {uid!r}")
+    claim_group_members: dict[str, set[str]] = {}
+    for g in _as_list(collection.get("claim_groups")):
+        if isinstance(g, dict):
+            claim_group_members[_text(g.get("group_id"))] = set(_text(u) for u in _as_list(g.get("claim_uids")))
+    # disagreement_relations
+    relations = terrain.get("disagreement_relations")
+    if not isinstance(relations, list):
+        issues.append("terrain.disagreement_relations must be a list")
+    else:
+        seen_rid: set[str] = set()
+        for rel in relations:
+            if not isinstance(rel, dict):
+                issues.append("terrain.disagreement_relations row must be an object")
+                continue
+            rid = rel.get("relation_id")
+            if not _required_nonempty_str(rid):
+                issues.append("disagreement relation must have a non-empty relation_id")
+            elif rid in seen_rid:
+                issues.append(f"duplicate disagreement relation_id: {rid!r}")
+            else:
+                seen_rid.add(rid)
+            cgid = rel.get("claim_group_id")
+            if cgid not in group_ids:
+                issues.append(f"disagreement relation references nonexistent group: {cgid!r}")
+            rel_uids = _as_list(rel.get("claim_uids"))
+            if not isinstance(rel.get("claim_uids"), list):
+                issues.append("disagreement relation claim_uids must be a list")
+            for uid in rel_uids:
+                if uid not in claim_index:
+                    issues.append(f"disagreement relation references nonexistent claim uid: {uid!r}")
+                elif cgid in claim_group_members and uid not in claim_group_members[cgid]:
+                    issues.append(f"disagreement relation claim uid {uid!r} does not belong to its claim group {cgid!r}")
+    # outlier_details
+    outliers = terrain.get("outlier_details")
+    if not isinstance(outliers, list):
+        issues.append("terrain.outlier_details must be a list")
+    else:
+        for od in outliers:
+            if not isinstance(od, dict):
+                issues.append("terrain.outlier_details row must be an object")
+                continue
+            cgid = od.get("claim_group_id")
+            if cgid not in group_ids:
+                issues.append(f"outlier detail references nonexistent group: {cgid!r}")
+            od_uids = _as_list(od.get("claim_uids"))
+            if not isinstance(od.get("claim_uids"), list):
+                issues.append("outlier detail claim_uids must be a list")
+            for uid in od_uids:
+                if uid not in claim_index:
+                    issues.append(f"outlier detail references nonexistent claim uid: {uid!r}")
+                elif cgid in claim_group_members and uid not in claim_group_members[cgid]:
+                    issues.append(f"outlier detail claim uid {uid!r} does not belong to its claim group {cgid!r}")
+    # provenance / limitations
+    provenance = collection.get("provenance")
+    if provenance is not None and not isinstance(provenance, dict):
+        issues.append("provenance must be an object")
+    limitations = collection.get("limitations")
+    if not isinstance(limitations, list):
+        issues.append("limitations must be a list")
+    else:
+        for i, item in enumerate(limitations):
+            if not isinstance(item, str):
+                issues.append(f"limitations[{i}] must be a string")
     return issues
 
 
@@ -1592,19 +1713,32 @@ def validate_expected_groupings_document(data: Any, *, label: str = "expected gr
     """Validate a user-supplied expected_groupings.json document.
 
     Enforces a strict fail-closed contract so the evaluator never receives
-    malformed input: ``must_link`` / ``cannot_link`` are strict lists of exact
-    two-item lists of non-empty strings, and ``threshold`` (when present) must
-    be a finite numeric value within ``[0, 1]``. Booleans are rejected;
-    NaN/Infinity are rejected via ``math.isfinite``; strings are never coerced
-    through ``float()`` during evaluation.
+    malformed input: ``must_link`` is REQUIRED and must be a list of exact
+    two-item lists of non-empty strings; ``cannot_link`` (when present) follows
+    the same rule; ``threshold`` (when present) must be a finite numeric value
+    within ``[0, 1]``. Booleans are rejected; NaN/Infinity are rejected via
+    ``math.isfinite``; strings are never coerced through ``float()``. Duplicate
+    pairs, contradictory pairs shared across must-link and cannot-link, and
+    same-item pairs are rejected, and unknown fields are rejected (strict
+    contract).
     """
     issues: list[str] = []
     if not isinstance(data, dict):
         return [f"{label} must be an object"]
 
+    allowed_keys = {"must_link", "cannot_link", "threshold", "schema_version", "metric"}
+    for key in data:
+        if key not in allowed_keys:
+            issues.append(f"{label} has unknown field: {key!r}")
+
     def check_pairs(key: str) -> None:
+        if key not in data:
+            if key == "must_link":
+                issues.append(f"{label}.must_link is required")
+            return
         value = data.get(key)
         if value is None:
+            issues.append(f"{label}.{key} must not be null")
             return
         if not isinstance(value, list):
             issues.append(f"{label}.{key} must be a list")
@@ -1620,6 +1754,24 @@ def validate_expected_groupings_document(data: Any, *, label: str = "expected gr
     check_pairs("must_link")
     check_pairs("cannot_link")
 
+    normalized_pairs = _normalize_expected_pairs(data)
+    # A link is undirected: ["a","b"] and ["b","a"] are the same pair, so both
+    # exact and reversed duplicates are rejected. Sorting gives a canonical key.
+    seen_unordered: dict[tuple[str, str], str] = {}
+    for key, left, right in normalized_pairs:
+        unordered = tuple(sorted((left, right)))
+        if left == right:
+            issues.append(f"{label}.{key} pair has the same item on both sides: {left!r}")
+        if unordered in seen_unordered:
+            issues.append(f"{label}.{key} contains duplicate pair: {list(unordered)!r}")
+        else:
+            seen_unordered[unordered] = key
+
+    must_link_sets = {tuple(sorted((l, r))) for k, l, r in normalized_pairs if k == "must_link"}
+    cannot_link_sets = {tuple(sorted((l, r))) for k, l, r in normalized_pairs if k == "cannot_link"}
+    for unordered in must_link_sets & cannot_link_sets:
+        issues.append(f"{label} contains contradictory pair in both must_link and cannot_link: {list(unordered)!r}")
+
     threshold = data.get("threshold") if "threshold" in data else None
     if "threshold" in data:
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
@@ -1629,6 +1781,24 @@ def validate_expected_groupings_document(data: Any, *, label: str = "expected gr
         elif not (0.0 <= threshold <= 1.0):
             issues.append(f"{label}.threshold must satisfy 0 <= threshold <= 1")
     return issues
+
+
+def _normalize_expected_pairs(data: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Return validated (key, left, right) triples for well-formed rows.
+
+    Returns an empty list when the document is malformed; the validator reports
+    the specific issues in that case. Only used for duplicate/contradiction
+    detection against already-validated rows.
+    """
+    out: list[tuple[str, str, str]] = []
+    for key in ("must_link", "cannot_link"):
+        rows = data.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, list) and len(row) == 2 and all(isinstance(x, str) and x.strip() for x in row):
+                out.append((key, row[0].strip(), row[1].strip()))
+    return out
 
 
 def assert_valid_expected_groupings_document(data: Any, *, label: str) -> dict[str, Any]:
@@ -1644,7 +1814,12 @@ def evaluate_topic_collection(collection: dict[str, Any], expected: dict[str, An
     The metric is intentionally simple and local: must-link pairs should land in
     the same group, and cannot-link pairs should land in different groups. It is
     a smoke-quality signal, not a production benchmark.
+
+    Evaluation is fail-closed: the expected document is strictly validated up
+    front (assert_valid_expected_groupings_document) so malformed rows can never
+    be silently skipped or produce a score from a reduced set.
     """
+    assert_valid_expected_groupings_document(expected, label="expected groupings")
     claim_index = collection.get("claim_index") or {}
     uid_to_group: dict[str, str] = {}
     text_to_uid: dict[str, str] = {}

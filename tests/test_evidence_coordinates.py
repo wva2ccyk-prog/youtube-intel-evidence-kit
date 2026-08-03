@@ -285,3 +285,66 @@ def test_schema_and_python_validator_agree_on_generated_output(tmp_path: Path) -
     doc = _topic_collection(tmp_path)
     assert not _schema_errors(doc), "generated output must pass the JSON schema"
     assert not validate_topic_collection_document(doc), "generated output must pass the Python validator"
+
+
+# --- Fourth pass: schema/runtime parity over a mutation corpus ---------------
+
+
+def test_schema_and_runtime_parity_on_mutation_corpus() -> None:
+    """Both the JSON Schema and the dependency-free Python validator must reject
+    the same contract-level mutations. Valid outputs must pass both."""
+    from youtube_intel.topic_collection import validate_topic_collection_document
+
+    valid_claim_index = {
+        "v1:c1": {
+            "claim_uid": "v1:c1", "source_video_id": "v1", "text": "a claim",
+            "evidence_ids": ["v1:e1"],
+            "evidence_coordinate": {
+                "evidence_id": "v1:e1", "video_id": "v1", "timestamp_start": 0.0,
+                "timestamp_end": 1.0, "time_ref": "00:00", "speaker": "A",
+                "speaker_confidence": "high", "modality": ["caption"],
+            },
+        }
+    }
+    valid_evidence_index = {
+        "v1:e1": {
+            "evidence_id": "v1:e1", "video_id": "v1", "timestamp_start": 0.0,
+            "timestamp_end": 1.0, "time_ref": "00:00", "speaker": "A",
+            "speaker_confidence": "high", "modality": ["caption"], "text": "ev",
+            "confidence": "medium",
+        }
+    }
+
+    corpus = [
+        lambda d: d.pop("video_record_count"),
+        lambda d: d.pop("claim_total"),
+        lambda d: d["claim_index"].clear(),
+        lambda d: d["evidence_index"].clear(),
+        lambda d: d["source_videos"][0].pop("title"),
+        lambda d: d["source_videos"][0].pop("role_in_topic"),
+        lambda d: d["source_videos"][0].pop("transcript_source"),
+        lambda d: d["source_videos"][0].pop("transcript_quality"),
+        lambda d: d["evidence_index"]["v1:e1"].update(timestamp_start="banana"),
+        lambda d: d["claim_index"]["v1:c1"]["evidence_coordinate"].update(timestamp_start="banana"),
+        lambda d: d["evidence_index"]["v1:e1"].update(timestamp_start=True),
+        lambda d: d["claim_index"]["v1:c1"]["evidence_coordinate"].update(timestamp_start=True),
+        lambda d: d["evidence_index"]["v1:e1"].update(timestamp_end=-1.0),
+        lambda d: d["claim_index"]["v1:c1"]["evidence_coordinate"].update(timestamp_end=-1.0),
+        lambda d: d["evidence_index"]["v1:e1"].update(speaker=123),
+        lambda d: d["claim_index"]["v1:c1"]["evidence_coordinate"].update(speaker=123),
+        lambda d: d["evidence_index"]["v1:e1"].update(speaker_confidence="bogus"),
+        lambda d: d["claim_index"]["v1:c1"]["evidence_coordinate"].update(speaker_confidence="bogus"),
+        lambda d: d["terrain"].update(repeated_claim_group_ids="not-a-list"),
+        lambda d: d["terrain"].pop("repeated_claim_group_ids"),
+        lambda d: d["limitations"].append(123),
+        lambda d: d.update(limitations="not-a-list"),
+    ]
+    for mutate in corpus:
+        doc = _base_doc()
+        doc["claim_index"] = dict(valid_claim_index)
+        doc["evidence_index"] = dict(valid_evidence_index)
+        mutate(doc)
+        python_errors = validate_topic_collection_document(doc)
+        schema_errors = _schema_errors(doc)
+        assert python_errors, f"python validator accepted a contract mutation: {list(mutate.__code__.co_consts)}"
+        assert schema_errors, f"JSON schema accepted a contract mutation: {list(mutate.__code__.co_consts)}"
