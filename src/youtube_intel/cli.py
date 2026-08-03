@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from youtube_intel.analysis_worth import build_analysis_worth
-from youtube_intel._fixtures import fixture_exists, fixture_path, is_installed_package, is_source_checkout
+from youtube_intel._fixtures import fixture_exists, fixture_path, find_source_root, is_installed_package, is_source_checkout
 from youtube_intel.errors import InvalidInputError
 from youtube_intel.hesitation_markers import (
     analyze_claim_words,
@@ -324,6 +324,8 @@ def cmd_check_plugins(args: argparse.Namespace) -> int:
 
 GENERATED_DIR_NAMES = {"outputs", "pilot_runs", "codex_state", ".youtube_intel"}
 GENERATED_FILE_SUFFIXES = {".db", ".log"}
+# Protected source directories that must never be deleted, even with --force.
+PROTECTED_DIR_NAMES = {"src", ".git", "tests", "schemas", ".github", "docs", "scripts"}
 
 
 def _clean_plan(
@@ -337,7 +339,9 @@ def _clean_plan(
     Every path is resolved (symlinks followed) BEFORE any deletion decision.
     Filesystem root, user home, the repository root itself, and any path
     outside the repository are always refused. Repository-internal paths that
-    are not recognized generated-output locations require ``force=True``.
+    are not recognized generated-output locations require ``force=True``, but
+    protected source directories (``src``, ``.git``, ``tests``, ``schemas``,
+    ``.github``, ``docs``, ``scripts``) are never deletable even with ``--force``.
     Any refusal means the caller must fail closed and delete nothing.
     """
     root = repo_root.resolve()
@@ -365,6 +369,12 @@ def _clean_plan(
             continue
         rel = target.relative_to(root)
         first = rel.parts[0]
+        if first in PROTECTED_DIR_NAMES:
+            refusals.append(
+                f"refusing to delete protected source directory: {raw!r} -> {target} "
+                f"(protected: {first}/)"
+            )
+            continue
         is_generated = (
             first in GENERATED_DIR_NAMES
             or (len(rel.parts) == 1 and target.suffix.lower() in GENERATED_FILE_SUFFIXES)
@@ -380,7 +390,16 @@ def _clean_plan(
 
 
 def cmd_clean(args: argparse.Namespace) -> int:
-    root = _repo_root().resolve()
+    # clean is a source-workspace maintenance command. It must never operate
+    # from an installed wheel, where the module location is inside site-packages
+    # and must not be treated as a deletion boundary.
+    root = find_source_root()
+    if root is None:
+        return _print({
+            "ok": False,
+            "error": "InvalidInputError",
+            "message": "clean is available only from a detected source checkout",
+        })
     allowed, missing, refusals = _clean_plan(args.path, repo_root=root, force=args.force)
     if refusals:
         # Fail closed: a dangerous or unauthorized target means NOTHING is
