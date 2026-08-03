@@ -246,18 +246,90 @@ def cmd_check_plugins(args: argparse.Namespace) -> int:
     return _print({"ok": True, "optional_plugins": check_all()})
 
 
-def cmd_clean(args: argparse.Namespace) -> int:
-    targets = [Path(p) for p in args.path]
-    removed: list[str] = []
-    for target in targets:
-        if not target.exists():
+GENERATED_DIR_NAMES = {"outputs", "pilot_runs", "codex_state", ".youtube_intel"}
+GENERATED_FILE_SUFFIXES = {".db", ".log"}
+
+
+def _clean_plan(
+    targets: list[str],
+    *,
+    repo_root: Path,
+    force: bool,
+) -> tuple[list[Path], list[Path], list[str]]:
+    """Resolve every target and return ``(allowed, missing, refusals)``.
+
+    Every path is resolved (symlinks followed) BEFORE any deletion decision.
+    Filesystem root, user home, the repository root itself, and any path
+    outside the repository are always refused. Repository-internal paths that
+    are not recognized generated-output locations require ``force=True``.
+    Any refusal means the caller must fail closed and delete nothing.
+    """
+    root = repo_root.resolve()
+    home = Path.home().resolve()
+    allowed: list[Path] = []
+    missing: list[Path] = []
+    refusals: list[str] = []
+    for raw in targets:
+        raw_path = Path(raw)
+        if not raw_path.exists() and not raw_path.is_symlink():
+            missing.append(raw_path)
             continue
-        if target.is_dir():
+        target = raw_path.resolve()
+        if target == Path("/"):
+            refusals.append(f"refusing to delete filesystem root: {raw!r}")
+            continue
+        if target == home:
+            refusals.append(f"refusing to delete user home: {raw!r}")
+            continue
+        if target == root:
+            refusals.append(f"refusing to delete repository root: {root}")
+            continue
+        if root not in target.parents:
+            refusals.append(f"refusing to delete path outside the repository: {raw!r} -> {target}")
+            continue
+        rel = target.relative_to(root)
+        first = rel.parts[0]
+        is_generated = (
+            first in GENERATED_DIR_NAMES
+            or (len(rel.parts) == 1 and target.suffix.lower() in GENERATED_FILE_SUFFIXES)
+        )
+        if not is_generated and not force:
+            refusals.append(
+                f"refusing to delete non-generated path: {raw!r} -> {target} "
+                f"(use --force to allow non-default paths)"
+            )
+            continue
+        allowed.append(target)
+    return allowed, missing, refusals
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    root = _repo_root().resolve()
+    allowed, missing, refusals = _clean_plan(args.path, repo_root=root, force=args.force)
+    if refusals:
+        # Fail closed: a dangerous or unauthorized target means NOTHING is
+        # deleted, and the refusal is returned as structured JSON.
+        return _print({
+            "ok": False,
+            "error": "UnsafeCleanTargetError",
+            "message": "refusing to delete dangerous or unauthorized paths",
+            "refusals": refusals,
+        })
+    if args.dry_run:
+        return _print({
+            "ok": True,
+            "dry_run": True,
+            "would_remove": [str(p) for p in allowed],
+            "missing": [str(p) for p in missing],
+        })
+    removed: list[str] = []
+    for target in allowed:
+        if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         else:
             target.unlink()
         removed.append(str(target))
-    return _print({"ok": True, "removed": removed})
+    return _print({"ok": True, "removed": removed, "missing": [str(p) for p in missing]})
 
 
 def cmd_mcp_stdio(args: argparse.Namespace) -> int:
@@ -337,8 +409,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("check-plugins", help="Print optional plugin status.")
     p.set_defaults(func=cmd_check_plugins)
 
-    p = sub.add_parser("clean", help="Remove generated output paths.")
+    p = sub.add_parser("clean", help="Remove generated output paths (repository-bound and fail-closed by default).")
     p.add_argument("path", nargs="+", default=["outputs/demo"])
+    p.add_argument("--dry-run", action="store_true", help="Report what would be removed without deleting anything.")
+    p.add_argument("--force", action="store_true", help="Allow repository-internal paths that are not recognized generated-output locations.")
     p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("mcp-stdio", help="Run the read-only synthetic overlay MCP-style JSON-RPC stdio smoke server.")
