@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -747,16 +747,29 @@ def _dominant_axis(group: dict[str, Any]) -> str:
     lists it first. Ties are broken deterministically by the declared
     ``_OPINION_AXES`` order (supporting, challenging, alternative), and a
     group with no recognized roles falls back to ``reported``.
+
+    ``support_role_counts`` (a dict of role name -> claim count) is preferred
+    because it preserves multiplicity; ``support_roles`` (a deduplicated list)
+    is only a fallback for callers that never populated counts.
     """
-    roles = _as_list(group.get("support_roles"))
     counts: dict[str, int] = defaultdict(int)
-    for role in roles:
-        role_text = _text(role)
-        for axis_key, axis in _OPINION_AXES.items():
-            if axis_key == "reported":
-                continue
-            if role_text in axis["roles"]:
-                counts[axis_key] += 1
+    role_counts = group.get("support_role_counts")
+    if isinstance(role_counts, dict):
+        for role, count in role_counts.items():
+            count = int(count) if isinstance(count, (int, float)) else 1
+            for axis_key, axis in _OPINION_AXES.items():
+                if axis_key == "reported":
+                    continue
+                if _text(role) in axis["roles"]:
+                    counts[axis_key] += count
+    else:
+        for role in _as_list(group.get("support_roles")):
+            role_text = _text(role)
+            for axis_key, axis in _OPINION_AXES.items():
+                if axis_key == "reported":
+                    continue
+                if role_text in axis["roles"]:
+                    counts[axis_key] += 1
     if not counts:
         return "reported"
     ordered_axes = [k for k in _OPINION_AXES if k != "reported"]
@@ -993,7 +1006,11 @@ def build_topic_collection(
         group_id = f"G{idx:04d}"
         video_ids = sorted({_text(c.get("source_video_id"), "unknown-video") for c in claims})
         stances = sorted({_text(c.get("stance"), "reported_claim") for c in claims})
-        roles = sorted({_text(c.get("support_role"), "reported_context") for c in claims})
+        # Preserve role multiplicity for majority calculations: a group with one
+        # supporting and three challenging claims must NOT look like a tie.
+        role_values = [_text(c.get("support_role"), "reported_context") for c in claims]
+        roles = sorted(set(role_values))
+        support_role_counts = dict(sorted(Counter(role_values).items()))
         has_disagreement = (
             "claim_or_promotion" in stances
             and ("caution_or_counterpoint" in stances or "hypothesis_or_alternative" in stances)
@@ -1033,6 +1050,7 @@ def build_topic_collection(
             "claim_count": len(claims),
             "stances": stances,
             "support_roles": roles,
+            "support_role_counts": support_role_counts,
             "status": {
                 "repeated_claim": is_repeated,
                 "disagreement_point": has_disagreement,
