@@ -25,6 +25,10 @@ codex_state/
 .tmp/
 tmp_*/
 
+# Local secret-pattern denylist files: never tracked, never released
+.release_private_denylist.local
+private_denylist.local
+
 # Runtime data and media artifacts
 *.db
 *.sqlite
