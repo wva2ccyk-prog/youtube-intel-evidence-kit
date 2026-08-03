@@ -1,32 +1,30 @@
-# Global Audit Remediation + Two Independent-Review Corrective Passes
+# Global Audit Remediation + Three Independent-Review Corrective Passes
 
 ## Summary
 
-Code-level remediation of the global audit findings, plus **two independent-review corrective passes** addressing every merge-blocking defect found in the reviews. This is not a documentation-only change: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries were fixed and are enforced by regression tests, CI, and a live PR description that matches the implementation.
+Code-level remediation of the global audit findings, plus **three independent-review corrective passes** addressing every merge-blocking defect found in the reviews. Not documentation-only: runtime behavior, evidence provenance, packaging, schemas, tests, CI, and safety boundaries are fixed and enforced by regression tests, CI, and this live PR description, which matches the implementation.
 
 **Not merged.** Returned to ready-for-review only after all checks pass.
 
-## Second Corrective Pass: Merge-Blocking Defects Fixed
+## Third Corrective Pass: Merge-Blocking Defects Fixed
 
-1. **Representative evidence timestamps** - `_make_evidence_record()` now uses the real structured span (`span_start`/`span_end`) as `timestamp_start`/`timestamp_end` with full fractional precision (never rounded), falling back to `time_ref` only for legacy start and keeping end `None` when no real end exists. Values propagate identically into the claim record, `evidence_coordinate`, `evidence_index`, and group coordinates. Cross-layer equality is enforced by tests.
-2. **`worth` / `topic-demo` fully fail-closed** - `worth` now strictly validates the primary package, every compare package (indexed in errors, never silently ignored), and run-dir inputs (dir existence, `residual/package.json`, strict optional `metadata.json`). `topic-demo` strictly reads and validates every `video_*.json` (top-level object, video object, non-empty identity never fabricated from filename stems, non-empty segments, per-segment object with non-empty text) and validates `expected_groupings.json` before writing any artifact, so a malformed later source cannot leave a half-written output directory.
-3. **Dependency-free TopicCollection validator strengthened** - `validate_topic_collection_document()` now structurally validates claim_index/evidence_index records (non-empty ids, resolving references, coordinate-vs-evidence agreement), declared `video_record_count` consistency, and claim coverage by groups; the MCP facade inherits all of this.
-4. **`clean --force` no longer deletes arbitrary content** - only recognized generated-output locations are deletable; `--force` was removed from the CLI and never widens the deletion set, so non-generated and protected repository content cannot be removed.
-5. **Handoff `source_trace` validation cannot be bypassed** - every source-trace row must be an object with a non-empty claim_id that resolves to a package claim; malformed/empty rows are rejected with their index.
-6. **Source-checkout `topic-demo` resolves canonical `examples/topic_demo`** - `fixture_path()` now resolves directories (including `topic_demo`) to `examples/` in a source checkout instead of the packaged `_fixtures` copy, via the explicit `PACKAGED_TO_EXAMPLES` map.
+1. **Default `cue`-mode timestamp provenance** - the default `claim_assembly="cue"` path lost structured `start`/`end` because raw segments were not normalized into `span_start`/`span_end`/`source_cue_coordinates`. A shared `normalize_segment_provenance()` now converts each raw segment into a complete single-cue structure (structured start/end take precedence; `time_ref` is only a legacy start fallback; absent end stays `None`; full fractional precision retained). Sentence mode passes its assembled provenance through unchanged. Both modes reject present-but-unparseable structured timestamps with `InvalidInputError`. Public `package` and `topic-demo` CLI paths are covered; representative coordinates are exactly equal across claim record, `evidence_coordinate`, `evidence_index`, and group coordinates.
+2. **Dependency-free TopicCollection/MCP validation completed** - `validate_topic_collection_document()` is rewritten into focused helpers enforcing exact schema identity, non-empty/unique source video ids, required positive-integer counts, claim/evidence index key equality, full evidence-id resolution (not just the coordinate-selected one), claim/evidence coordinate agreement (evidence_id, video_id, timestamps, time_ref, speaker, speaker_confidence, modality), group member-array agreement, complete coordinate coverage, and terrain reference resolution. 25 negative mutations are rejected through the public `load_topic_collection()` loader with `InvalidInputError`.
+3. **Expected-grouping fail-closed validation** - `expected_groupings.json` is now strictly validated: `must_link`/`cannot_link` must be exact two-item non-empty string pairs; `threshold` must be int/float (bool rejected), finite (NaN/Infinity rejected), and within `[0, 1]`. The evaluator no longer coerces through `float()`. Malformed documents fail with exit 2, structured `InvalidInputError`, no traceback, and no output artifacts.
+4. **Strict residual-package string contracts** - required identity/text fields (`video_id`/`title`/`language`/`claim_id`/`text`) must actually be strings, non-empty after stripping (no `str()` coercion; whitespace-only values rejected); claim IDs are checked against the reserved fallback set; duplicate detection uses normalized values. Both `worth` and `handoff` consume the shared validator and fail closed.
+5. **Complete handoff identity and source-trace coherence** - analysis-worth requires a non-empty `video.title`; package/worth `video_id` and `title` must match exactly (missing values are structural errors, no guarded comparisons). Every source-trace row must carry non-empty `claim_id`/`evidence`/`confidence`, resolve to a package claim, be non-duplicated, and agree with the source claim's `time_ref`/`claim_type`/`evidence`/`confidence`. No bundle is written before validation succeeds.
 
-## Test Additions (second pass)
+## Test Additions (third pass)
 
-- `test_representative_timestamps.py` (7): fractional/no-time-ref/legacy timestamps, cross-layer equality, no precision loss, source-checkout topic_demo resolution.
-- `test_worth_fail_closed.py` (18): all invalid-package, compare-package, run-dir, and metadata cases.
-- `test_topic_demo_fail_closed.py` (17): all malformed/empty/invalid source and expected-grouping cases, one-valid-one-invalid atomicity, success paths.
-- `test_clean_safety.py` (+2): non-generated content never deletable via CLI, even with `--force`.
-- `test_mcp_runtime_validation.py` (+4): empty source video, empty evidence video, uncovered claim, missing evidence_coordinate.
-- `test_handoff_bundle.py` (+3): non-dict/empty source-trace rows rejected.
+- `test_representative_timestamps.py` (+6): default cue-mode fractional timestamps via `package`/`topic-demo` CLIs, legacy `time_ref`-only, structured-only, invalid timestamp rejection in cue and sentence modes.
+- `test_mcp_runtime_validation.py` (+26): wrong schema version, empty topic id/title, empty/duplicate source videos, missing/non-integer/mismatched counts, claim-index key/uid mismatch, empty claim text, secondary dangling & duplicate evidence ids, evidence-index key/id mismatch, coordinate time_ref/speaker_confidence/modality mismatch, member-array mismatch, empty group evidence ids/coordinates, unlisted/duplicate coordinate ids, terrain/disagreement/outlier dangling ids.
+- `test_topic_demo_fail_closed.py` (+17): threshold string/null/bool/out-of-range/NaN/Infinity, must_link/cannot_link scalar and malformed rows, empty/non-string pair items, valid success.
+- `test_package_strict_strings.py` (17): whitespace-only and non-string identity/text values, reserved claim id, whitespace-normalized duplicates, valid unicode + `und`, through `worth` and `handoff` CLIs.
+- `test_handoff_bundle.py` (+13): missing/blank worth title, title mismatch, whitespace/duplicate trace claim ids, missing/invalid time_ref, missing/blank evidence and confidence, trace time/evidence/confidence mismatch with source claim, valid complete trace.
 
 ## Exact Verification (latest)
 
-- `python -m pytest -W error -q -p no:cacheprovider` -> **393 passed, 0 warnings**
+- `python -m pytest -W error -q -p no:cacheprovider` -> **472 passed, 0 warnings**
 - `python scripts/check_encoding.py` -> passed
 - `python scripts/public_release_leak_scan.py` -> PASSED
 - `python -m compileall -q src tests scripts` -> ok
@@ -37,7 +35,7 @@ Code-level remediation of the global audit findings, plus **two independent-revi
 
 ## CI Jobs
 
-- `test (3.10)`, `test (3.12)` - source-mode tests, `-W error`, source-mode assertions, malformed CLI smoke
+- `test (3.10)`, `test (3.12)` - source-mode tests, `-W error`, source-mode assertions, extended malformed CLI smoke (cue-mode timestamps, worth strict strings, expected-grouping threshold, handoff trace, MCP validator)
 - `wheel-install` - clean wheel build/install, demos, schema validation, installed-wheel `clean` refusal
 - Status on latest push: **pass (all 3)**
 
@@ -56,3 +54,4 @@ PR #1 (run-verified audit documentation) remains open and is retained as **histo
 - The labeled orchard fixture score is an in-domain regression measurement (0.625 with complete-link vs 0.875 single-link); `expected_groupings.json` ground truth is untouched.
 - Korean grouping needs lower thresholds; the public MCP facility remains a read-only stdio facade.
 - This is **opinion-terrain evidence tooling, not truth verification**. Synthetic fixtures only for demos.
+

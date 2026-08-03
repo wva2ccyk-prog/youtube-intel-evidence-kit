@@ -72,7 +72,6 @@ generated artifacts first (`python scripts/clean_generated_artifacts.py`)
 because the scan rejects bytecode/cache artifacts.
 
 ## Main Commands
-
 | Command | Purpose |
 |---|---|
 | `youtube-intel doctor` | Health check: runtime_mode, fixture availability, gitignore safety, and repo-only script presence; exit 2 when unhealthy |
@@ -85,6 +84,15 @@ because the scan rejects bytecode/cache artifacts.
 | `youtube-intel mcp-stdio` | Run the legacy read-only synthetic overlay MCP-style JSON-RPC stdio smoke server |
 | `youtube-intel topic-mcp-stdio --topic-collection outputs/topic_demo/topic_collection.json` | Run the read-only TopicCollection MCP-ready JSON-RPC stdio handoff facade |
 | `youtube-intel clean outputs/demo outputs/topic_demo` | Remove generated artifacts (source-checkout only; repository-bound and fail-closed; only generated-output locations are deletable, never arbitrary, protected, or non-generated content; `--dry-run` to preview) |
+
+## Integrity Contracts
+
+- **Timestamps**: segment `start`/`end` are real, fractional-preserving cue timestamps. The default `cue` assembly path (and sentence assembly) carries them into `source_cue_coordinates`, `span_start`/`span_end`, the claim record, the evidence record, and group coordinates — exactly equal at every layer. `time_ref` is only a legacy fallback for start; an absent end is `null`, never fabricated; present-but-unparseable structured timestamps fail closed with `InvalidInputError`.
+- **Expected groupings**: `topic_demo`-consumed `expected_groupings.json` is strictly validated — `must_link`/`cannot_link` must be lists of exact two-item non-empty string pairs and `threshold` must be a finite number in `[0, 1]` (NaN/Infinity/booleans/strings rejected). Malformed documents fail with exit 2 and no output artifacts.
+- **Package strings**: residual-package `video_id`/`title`/`language` and claim `claim_id`/`text` must actually be strings and non-empty after stripping (whitespace-only values rejected; no `str()` coercion); duplicates and reserved fallback ids (`unknown-video`, `unknown-claim`, ...) are rejected using normalized values.
+- **Handoff coherence**: a complete handoff requires a structurally valid residual package and analysis-worth artifact with matching `video_id` and `title`; every `source_trace` row must carry non-empty `claim_id`/`evidence`/`confidence`, resolve to a package claim, be non-duplicated, and agree with the source claim's `time_ref`/`claim_type`/`evidence`/`confidence`.
+- **MCP validation**: the TopicCollection MCP facade validates every loaded document with the dependency-free runtime validator (schema identity, topic identity, source videos, indexes, groups, terrain, coordinates) before any tool response is constructed; the overlay MCP server loads overlays through `load_validated_operator_overlay()` in every public entry point.
+- **Fixtures**: source checkouts resolve fixtures from canonical repository-root `examples/`; installed wheels use the packaged copies under `youtube_intel._fixtures` (byte-for-byte parity is enforced by `tests/test_fixture_parity.py`).
 
 ## Operator Loop
 
