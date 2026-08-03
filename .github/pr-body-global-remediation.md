@@ -71,6 +71,7 @@ Built `dist/youtube_intel_evidence_kit-0.1.0-py3-none-any.whl`, installed into a
 
 - The labeled orchard fixture score is an **in-domain regression measurement**, not a benchmark: the must-link labels encode semantic topic relatedness while the alpha clusterer uses lexical normalized similarity. The complete-link cohesion rule deliberately separates weakly bridged claims, so the fixture score moved from 0.875 (single-link, bridge chaining) to ~0.625; `expected_groupings.json` ground truth is left untouched.
 - Korean normalized similarity runs lower than English (no space-delimited tokenization benefit); Korean grouping may require an explicit lower threshold.
+- P1-C (Korean high-risk marker false positives such as `용량` inside `사용량`) and P1-D (aside-detector corpus overfitting, e.g. ordinary price/product phrases flagged as hidden information) are **not fully remediated in this branch**. The Korean marker and aside detectors still use substring/denylist heuristics; a stronger-evidence rule (two independent markers or one unambiguous marker) and fixture-scaffold separation remain follow-up work.
 - The public MCP facility remains a read-only stdio facade, not a full MCP server.
 
 ## Relationship to PR #1
