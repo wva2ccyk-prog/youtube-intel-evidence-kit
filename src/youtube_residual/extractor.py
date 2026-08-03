@@ -48,6 +48,7 @@ class ClaimCandidate:
     source_hint: str | None = None
     cue_indices: list[int] = field(default_factory=list)
     source_time_refs: list[Any] = field(default_factory=list)
+    source_cue_coordinates: list[Any] = field(default_factory=list)
     span_start: float | None = None
     span_end: float | None = None
 
@@ -61,6 +62,7 @@ class ClaimCandidate:
             "source_hint": self.source_hint,
             "cue_indices": list(self.cue_indices),
             "source_time_refs": list(self.source_time_refs),
+            "source_cue_coordinates": [dict(c) for c in self.source_cue_coordinates],
             "span_start": self.span_start,
             "span_end": self.span_end,
             "content_type": self.axes.content_type,
@@ -106,6 +108,7 @@ def build_claim_candidates(
     presplit: bool = True,
     cue_indices: list[int] | None = None,
     source_time_refs: list[Any] | None = None,
+    source_cue_coordinates: list[Any] | None = None,
     span_start: float | None = None,
     span_end: float | None = None,
 ) -> list[ClaimCandidate]:
@@ -119,9 +122,10 @@ def build_claim_candidates(
     False when ``text`` is already one assembled sentence unit (opt-in
     claim_assembly="sentence") and must map to exactly one candidate.
 
-    ``cue_indices`` / ``source_time_refs`` / ``span_start`` / ``span_end`` carry
-    the assembled sentence's cue-level provenance onto every candidate produced
-    from that sentence, so the serialized claim resolves to its source cues.
+    ``cue_indices`` / ``source_time_refs`` / ``source_cue_coordinates`` /
+    ``span_start`` / ``span_end`` carry the assembled sentence's cue-level
+    provenance onto every candidate produced from that sentence, so the
+    serialized claim resolves to its source cues.
     """
     candidates: list[ClaimCandidate] = []
     if presplit:
@@ -144,6 +148,7 @@ def build_claim_candidates(
                 source_hint=source_hint,
                 cue_indices=list(cue_indices or []),
                 source_time_refs=list(source_time_refs or []),
+                source_cue_coordinates=[dict(c) for c in (source_cue_coordinates or [])],
                 span_start=span_start,
                 span_end=span_end,
             )

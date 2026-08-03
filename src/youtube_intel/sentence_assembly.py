@@ -102,6 +102,8 @@ class Cue:
     ``index`` is the cue's position in the source cue stream; it is preserved on
     the assembled unit so traceability back to evidence records is exact.
     ``start``/``end`` are seconds (float) or None when timing is unavailable.
+    ``time_ref`` is the original display timestamp string (``mm:ss``), retained
+    for provenance even when structured start/end seconds are also present.
 
     ``speaker`` / ``modality_source`` / ``source_hint`` carry per-cue provenance.
     When any of these change between two consecutive cues, assembly FORCES a
@@ -113,6 +115,7 @@ class Cue:
     text: str
     start: float | None = None
     end: float | None = None
+    time_ref: Any = None
     speaker: Any = None
     modality_source: Any = None
     source_hint: Any = None
@@ -124,8 +127,10 @@ class AssembledUnit:
 
     ``speaker`` / ``modality_source`` / ``source_hint`` are the provenance of the
     unit's cues (identical for every cue in the unit, because provenance changes
-    force boundaries). ``source_time_refs`` keeps the full per-cue timing list so
-    the merged text still resolves to every original timestamp.
+    force boundaries). ``source_time_refs`` keeps the legacy scalar per-cue
+    timing list (start seconds only) and ``source_cue_coordinates`` keeps the
+    complete structured per-cue timing records so the merged text resolves to
+    every original timestamp.
     """
 
     text: str
@@ -136,6 +141,7 @@ class AssembledUnit:
     modality_source: Any = None
     source_hint: Any = None
     source_time_refs: list[float | None] = field(default_factory=list)
+    source_cue_coordinates: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def span_seconds(self) -> float | None:
@@ -158,6 +164,7 @@ class AssembledUnit:
             "modality_source": self.modality_source,
             "source_hint": self.source_hint,
             "source_time_refs": list(self.source_time_refs),
+            "source_cue_coordinates": [dict(c) for c in self.source_cue_coordinates],
         }
 
 
@@ -196,10 +203,22 @@ def _flush(buffer: list[Cue]) -> AssembledUnit | None:
         return None
     text = _norm(" ".join(c.text for c in buffer))
     starts = [c.start for c in buffer if c.start is not None]
-    ends = [c.end for c in buffer if c.end is not None]
     start = starts[0] if starts else None
-    end = ends[-1] if ends else None
+    # span_end is the END of the final cue only. When the final cue has no end
+    # timestamp, span_end stays None: we never claim a duration through a cue
+    # whose end is unknown (no fabricated timestamps).
+    final_cue = buffer[-1]
+    end = final_cue.end
     first = buffer[0]
+    source_cue_coordinates = [
+        {
+            "cue_index": c.index,
+            "time_ref": c.time_ref,
+            "start": c.start,
+            "end": c.end,
+        }
+        for c in buffer
+    ]
     return AssembledUnit(
         text=text,
         start=start,
@@ -209,6 +228,7 @@ def _flush(buffer: list[Cue]) -> AssembledUnit | None:
         modality_source=first.modality_source,
         source_hint=first.source_hint,
         source_time_refs=[c.start for c in buffer],
+        source_cue_coordinates=source_cue_coordinates,
     )
 
 
@@ -309,22 +329,39 @@ def assemble_from_dicts(
     text_key: str = "text",
     start_key: str = "start",
     end_key: str = "end",
+    time_ref_key: str = "time_ref",
+    speaker_key: str = "speaker",
+    modality_key: str = "modality_source",
+    source_hint_key: str = "source_hint",
     max_chars: int = DEFAULT_MAX_CHARS,
     max_span_seconds: float = DEFAULT_MAX_SPAN_SECONDS,
 ) -> list[AssembledUnit]:
     """Convenience wrapper: build ``Cue``s from dict rows, then assemble.
 
     Timestamps under ``start_key``/``end_key`` may be seconds or ``mm:ss`` strings.
-    The dict's original position becomes the cue index.
+    The dict's original position becomes the cue index. Provenance fields
+    (``speaker`` / ``modality_source`` / ``source_hint``) are propagated into the
+    ``Cue`` so this entry point enforces the same speaker/modality/source
+    boundaries as the rest of the assembler; key names are configurable.
     """
     cue_objs: list[Cue] = []
     for i, row in enumerate(cues):
+        if not isinstance(row, dict):
+            raise ValueError(f"cue row {i} is not an object")
+        # Structured start wins; time_ref is the legacy fallback for start.
+        start = parse_timestamp(row.get(start_key))
+        if start is None:
+            start = parse_timestamp(row.get(time_ref_key))
         cue_objs.append(
             Cue(
                 index=i,
                 text=str(row.get(text_key, "") or ""),
-                start=parse_timestamp(row.get(start_key)),
+                start=start,
                 end=parse_timestamp(row.get(end_key)),
+                time_ref=row.get(time_ref_key),
+                speaker=row.get(speaker_key),
+                modality_source=row.get(modality_key),
+                source_hint=row.get(source_hint_key),
             )
         )
     return assemble_sentences(

@@ -79,21 +79,38 @@ def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
     sentence assembler. Speaker / source_hint / modality_source changes FORCE an
     assembly boundary, so a merged unit never spans two speakers, two
     modalities, or two evidence sources. Traceability fields
-    (``source_time_refs``, ``cue_indices``, ``span_start``, ``span_end``) are
-    attached so the merged text still resolves to the original cue timestamps
-    and source cue indices. Pure and deterministic.
+    (``source_time_refs``, ``source_cue_coordinates``, ``cue_indices``,
+    ``span_start``, ``span_end``) are attached so the merged text still resolves
+    to the original cue timestamps and source cue indices. Pure and deterministic.
+
+    Timing forms supported:
+
+    * structured ``{"start": 12.0, "end": 15.2, "time_ref": "00:12"}``
+    * string timestamps ``{"start": "00:12.000", "end": "00:15.200"}``
+    * legacy ``{"time_ref": "00:12"}`` (end stays None)
+
+    ``span_start`` is the first valid cue start; ``span_end`` is the final valid
+    cue end. No end timestamp is invented: when a cue has no ``end`` it is
+    ``None`` in ``source_cue_coordinates``.
     """
     from youtube_intel.sentence_assembly import Cue, assemble_sentences, parse_timestamp
 
     cues: list[Cue] = []
     for i, seg in enumerate(segments):
-        start = parse_timestamp(seg.get("time_ref"))
+        if not isinstance(seg, dict):
+            raise ValueError(f"segment {i} is not an object")
+        # Structured start/end win over the legacy time_ref fallback.
+        start = parse_timestamp(seg.get("start"))
+        if start is None:
+            start = parse_timestamp(seg.get("time_ref"))
+        end = parse_timestamp(seg.get("end"))
         cues.append(
             Cue(
                 index=i,
                 text=str(seg.get("text", "") or ""),
                 start=start,
-                end=start,
+                end=end,
+                time_ref=seg.get("time_ref"),
                 speaker=seg.get("speaker"),
                 modality_source=seg.get("modality_source"),
                 source_hint=seg.get("source_hint"),
@@ -112,6 +129,7 @@ def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
                 "source_hint": first.get("source_hint", "transcript"),
                 "modality_source": first.get("modality_source", "transcript"),
                 "source_time_refs": [segments[i].get("time_ref") for i in unit.cue_indices],
+                "source_cue_coordinates": [dict(c) for c in unit.source_cue_coordinates],
                 "cue_indices": list(unit.cue_indices),
                 "span_start": unit.start,
                 "span_end": unit.end,
@@ -165,6 +183,7 @@ def build_residual_package(
             presplit=not sentence_mode,
             cue_indices=seg.get("cue_indices"),
             source_time_refs=seg.get("source_time_refs"),
+            source_cue_coordinates=seg.get("source_cue_coordinates"),
             span_start=seg.get("span_start"),
             span_end=seg.get("span_end"),
         )

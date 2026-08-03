@@ -490,6 +490,7 @@ def _make_evidence_record(
     cue_indices: list[int] | None = None,
     span_start: Any = None,
     span_end: Any = None,
+    source_cue_coordinates: list[Any] | None = None,
 ) -> dict[str, Any]:
     timestamp_start = _parse_time_ref_to_seconds(time_ref)
     evidence_id = f"{video_id}:E{local_index:04d}"
@@ -506,6 +507,7 @@ def _make_evidence_record(
         "confidence": confidence,
         "source_separation": "video_internal_claim_not_external_source",
         "source_time_refs": list(source_time_refs) if source_time_refs else [],
+        "source_cue_coordinates": [dict(c) for c in (source_cue_coordinates or [])],
         "cue_indices": list(cue_indices) if cue_indices else [],
         "span_start": span_start,
         "span_end": span_end,
@@ -564,6 +566,7 @@ def build_video_knowledge_record(
             cue_indices=claim.get("cue_indices"),
             span_start=claim.get("span_start"),
             span_end=claim.get("span_end"),
+            source_cue_coordinates=claim.get("source_cue_coordinates"),
         )
         evidence_records.append(evidence_record)
         record = {
@@ -593,6 +596,7 @@ def build_video_knowledge_record(
             "confidence": confidence,
             "modality_sources": modality_sources,
             "source_time_refs": list(claim.get("source_time_refs") or []),
+            "source_cue_coordinates": [dict(c) for c in (claim.get("source_cue_coordinates") or [])],
             "cue_indices": list(claim.get("cue_indices") or []),
             "span_start": claim.get("span_start"),
             "span_end": claim.get("span_end"),
