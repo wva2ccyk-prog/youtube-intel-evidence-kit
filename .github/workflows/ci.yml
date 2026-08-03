@@ -38,3 +38,92 @@ jobs:
         run: python -m compileall -q src tests scripts
       - name: MCP handoff smoke
         run: python -m youtube_mcp_handoff.smoke
+
+  wheel-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Inspect wheel for required fixtures
+        run: |
+          python - <<'EOF'
+          import zipfile, glob
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          required = [
+              "youtube_intel/_fixtures/__init__.py",
+              "youtube_intel/_fixtures/synthetic_segments.json",
+              "youtube_intel/_fixtures/synthetic_package.json",
+              "youtube_intel/_fixtures/synthetic_hesitation.json",
+              "youtube_intel/_fixtures/operator_overlay.json",
+              "youtube_intel/_fixtures/topic_demo/video_a.json",
+              "youtube_intel/_fixtures/topic_demo/expected_groupings.json",
+          ]
+          missing = [r for r in required if r not in names]
+          assert not missing, f"wheel missing fixtures: {missing}"
+          print(f"wheel contains all {len(required)} required fixtures")
+          EOF
+      - name: Install wheel into a clean venv (no editable install)
+        run: |
+          python -m venv .wheel-venv
+          . .wheel-venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install dist/*.whl
+      - name: Run doctor from the installed wheel
+        run: |
+          . .wheel-venv/bin/activate
+          youtube-intel doctor | python -c "import json,sys; d=json.load(sys.stdin); assert d['ok'] is True; assert d['core']['runtime_mode'] == 'installed_package'; assert d['core']['synthetic_demo_available'] is True; print('doctor OK (installed_package)')"
+      - name: Run topic-demo from the installed wheel
+        run: |
+          . .wheel-venv/bin/activate
+          youtube-intel topic-demo --out /tmp/wheel-topic-demo | python -c "import json,sys; d=json.load(sys.stdin); assert d['ok'] is True; assert d['claim_group_count'] > 0; print('topic-demo OK')"
+          test -s /tmp/wheel-topic-demo/topic_collection.json
+          test -s /tmp/wheel-topic-demo/topic_handoff_manifest.json
+          python - <<'EOF'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("/tmp/wheel-topic-demo/topic_handoff_manifest.json").read_text())
+          on_disk = json.loads(Path("/tmp/wheel-topic-demo/topic_collection.json").read_text())
+          assert manifest["claim_group_count"] == len(on_disk["claim_groups"])
+          print("topic-demo artifacts non-empty and manifest consistent")
+          EOF
+      - name: Run single-video-demo from the installed wheel
+        run: |
+          . .wheel-venv/bin/activate
+          youtube-intel single-video-demo --out /tmp/wheel-single-demo | python -c "import json,sys; d=json.load(sys.stdin); assert d['ok'] is True; print('single-video-demo OK')"
+          test -s /tmp/wheel-single-demo/handoff/handoff_manifest.json
+          python - <<'EOF'
+          import json
+          from pathlib import Path
+          on_disk = json.loads(Path("/tmp/wheel-single-demo/handoff/handoff_manifest.json").read_text())
+          for key, path_text in on_disk["paths"].items():
+              assert Path(path_text).is_file(), f"missing artifact {key}"
+          print("single-video-demo artifacts non-empty; every manifest path exists")
+          EOF
+      - name: Run hesitation-demo from the installed wheel
+        run: |
+          . .wheel-venv/bin/activate
+          youtube-intel hesitation-demo --out /tmp/wheel-hesitation-demo | python -c "import json,sys; d=json.load(sys.stdin); assert d['ok'] is True; assert d['claim_count'] > 0; print('hesitation-demo OK')"
+          test -s /tmp/wheel-hesitation-demo/hesitation_markers.json
+      - name: Validate generated schemas from the installed wheel
+        run: |
+          . .wheel-venv/bin/activate
+          python - <<'EOF'
+          import json
+          from pathlib import Path
+          from jsonschema import Draft202012Validator
+          root = Path("/tmp/wheel-topic-demo")
+          collection = json.loads((root / "topic_collection.json").read_text())
+          schema = json.loads(Path("schemas/topic_collection.schema.json").read_text())
+          errors = sorted(Draft202012Validator(schema).iter_errors(collection), key=lambda e: list(e.path))
+          assert not errors, "; ".join(f"{list(e.path)}: {e.message}" for e in errors[:5])
+          print("generated TopicCollection validates against schema")
+          EOF
+

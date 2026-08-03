@@ -12,8 +12,8 @@ _DEFAULT_OVERLAY: Path | None = None
 def _resolve_overlay_path(overlay_path: str | Path | None) -> Path:
     if overlay_path is not None:
         return Path(overlay_path)
-    repo_root = Path(__file__).resolve().parents[2]
-    return repo_root / "examples" / "synthetic_overlay_demo" / "operator_overlay.json"
+    from youtube_intel._fixtures import fixture_path
+    return fixture_path("operator_overlay.json")
 
 
 def _wrap_with_guard(data: dict, overlay: dict) -> dict:

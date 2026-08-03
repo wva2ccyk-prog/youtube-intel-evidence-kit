@@ -37,7 +37,8 @@ def run_public_mcp_handoff_smoke_test(overlay_path: str | Path | None = None) ->
     if not all(t.get("read_only") for t in manifest["tools"]):
         errors.append("not_all_tools_read_only")
 
-    path = overlay_path or Path(__file__).resolve().parents[2] / "examples" / "synthetic_overlay_demo" / "operator_overlay.json"
+    from youtube_intel._fixtures import fixture_path
+    path = overlay_path or fixture_path("operator_overlay.json")
     overlay = load_operator_overlay(path)
     validation_errors = validate_overlay_for_public_demo(overlay)
     results["overlay_validation"] = validation_errors

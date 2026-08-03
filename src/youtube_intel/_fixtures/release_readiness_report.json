@@ -1,0 +1,31 @@
+{
+  "report_generated_at": "2026-06-14T00:00:00Z",
+  "topic_id": "synthetic_opinion_terrain_demo_v1",
+  "overlay_path": "examples/synthetic_overlay_demo/operator_overlay.json",
+  "overlay_validation": [],
+  "manifest": {
+    "schema_version": "public_ai_app_mcp_handoff_manifest.v1",
+    "server_name": "youtube_intel_public_opinion_terrain_mcp",
+    "topic_id": "synthetic_opinion_terrain_demo_v1",
+    "status": "PUBLIC_SYNTHETIC_DEMO_READY",
+    "tool_count": 4,
+    "all_read_only": true
+  },
+  "mcp_tool_results": {
+    "overlay.summary": "ok",
+    "overlay.groups": "ok",
+    "overlay.group_detail": "ok",
+    "overlay.limitations": "ok"
+  },
+  "answer_guard_results": {
+    "all_passed": true,
+    "checked_count": 4
+  },
+  "overall_status": "PASSED",
+  "limitations": [
+    "synthetic_fixture_only",
+    "caption_fragment_claim_risk",
+    "not truth-ranked",
+    "not fact-checked"
+  ]
+}

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from youtube_intel.analysis_worth import build_analysis_worth
+from youtube_intel._fixtures import fixture_exists, fixture_path, is_installed_package, is_source_checkout
 from youtube_intel.errors import InvalidInputError
 from youtube_intel.hesitation_markers import (
     analyze_claim_words,
@@ -48,7 +49,7 @@ def _load_segment_input(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]
 
 
 def _default_demo_segments() -> Path:
-    return _repo_root() / "examples" / "synthetic_segments.json"
+    return fixture_path("synthetic_segments.json")
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -56,18 +57,25 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     gitignore = (root / ".gitignore").read_text(encoding="utf-8") if (root / ".gitignore").exists() else ""
     required_ignores = ["outputs/", "pilot_[r]uns/", "codex_state/", ".youtube_intel/", "*.db", "*.log"]
     ignore_status = {pattern: (pattern in gitignore) for pattern in required_ignores}
-    demo_available = _default_demo_segments().exists() and (root / "examples" / "synthetic_package.json").exists()
-    topic_demo_available = (root / "examples" / "topic_demo").is_dir()
+    demo_available = _default_demo_segments().exists() and fixture_path("synthetic_package.json").exists()
+    topic_demo_available = fixture_path("topic_demo").is_dir()
     leak_scan_available = (root / "scripts" / "public_release_leak_scan.py").exists()
+    runtime_mode = (
+        "source_checkout" if is_source_checkout()
+        else "installed_package" if is_installed_package()
+        else "missing_resources"
+    )
     result = {
         "ok": True,
         "schema_version": "youtube_intel_doctor.v0.1",
         "core": {
             "python": sys.version.split()[0],
             "repo_root": str(root),
+            "runtime_mode": runtime_mode,
             "synthetic_demo_available": demo_available,
             "synthetic_topic_demo_available": topic_demo_available,
             "leak_scan_script_available": leak_scan_available,
+            "repository_only_checks_applicable": is_source_checkout(),
         },
         "safety": {
             "gitignore_patterns": ignore_status,
@@ -158,7 +166,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     residual_path = write_json(package_dir / "residual_package.json", package_dict)
     validation_path = write_json(package_dir / "validation.json", validation)
     worth = build_analysis_worth(package_path=residual_path, output_dir=worth_dir)
-    overlay_path = _repo_root() / "examples" / "synthetic_overlay_demo" / "operator_overlay.json"
+    overlay_path = fixture_path("operator_overlay.json")
     overlay = read_json(overlay_path, {}) if overlay_path.exists() else {}
     manifest = write_handoff_bundle(handoff_dir, package=package_dict, worth=worth, overlay=overlay)
     result = {
@@ -181,7 +189,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 def cmd_topic_demo(args: argparse.Namespace) -> int:
     root = _repo_root()
-    topic_dir = Path(args.topic_dir) if args.topic_dir else root / "examples" / "topic_demo"
+    topic_dir = Path(args.topic_dir) if args.topic_dir else fixture_path("topic_demo")
     manifest = build_topic_demo_from_segments(
         topic_dir,
         topic_id=args.topic_id,
@@ -202,7 +210,7 @@ def cmd_hesitation_demo(args: argparse.Namespace) -> int:
     not a default) over an operator-selected claim span; see
     docs/HESITATION_MARKERS.md.
     """
-    fixture = Path(args.fixture) if args.fixture else _repo_root() / "examples" / "synthetic_hesitation.json"
+    fixture = Path(args.fixture) if args.fixture else fixture_path("synthetic_hesitation.json")
     data = read_json(fixture, {})
     claims = data.get("claims", []) if isinstance(data, dict) else []
     if not isinstance(claims, list) or not claims:

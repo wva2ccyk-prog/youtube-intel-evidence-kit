@@ -1,0 +1,59 @@
+{
+  "video": {
+    "video_id": "synthetic-field-demo",
+    "title": "Synthetic Orchard Sensor Field Notes",
+    "language": "en",
+    "duration_seconds": 24
+  },
+  "genre": {
+    "genre": "technical_fieldwork",
+    "risk_domain": "medium",
+    "required_sections": [
+      "claim_summary",
+      "field_checks",
+      "verification_needed"
+    ],
+    "score": 1,
+    "matched_markers": [
+      "field",
+      "vendor",
+      "sensor"
+    ],
+    "detection_basis": "synthetic example"
+  },
+  "claim_candidates": [
+    {
+      "claim_id": "C0001",
+      "text": "The vendor says the orchard sensor kit can cut water use by twenty percent.",
+      "speaker": "narrator",
+      "time_ref": "00:06",
+      "content_type": "factual_claim",
+      "evidence": "video_internal",
+      "confidence": "medium",
+      "aside_type": "none",
+      "aside_score": 0
+    },
+    {
+      "claim_id": "C0002",
+      "text": "In the field, the cheap probes drifted after two foggy nights, which the sponsored case study did not mention.",
+      "speaker": "narrator",
+      "time_ref": "00:12",
+      "content_type": "technical_explanation",
+      "evidence": "video_internal",
+      "confidence": "medium",
+      "aside_type": "type1_hidden_info",
+      "aside_score": 4
+    },
+    {
+      "claim_id": "C0003",
+      "text": "This might be wrong, but local salinity may explain the yield bump more than the sensor software.",
+      "speaker": "narrator",
+      "time_ref": "00:18",
+      "content_type": "hypothesis",
+      "evidence": "inference",
+      "confidence": "low",
+      "aside_type": "type2_unformed_thought",
+      "aside_score": 3
+    }
+  ]
+}
