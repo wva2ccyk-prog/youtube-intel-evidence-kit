@@ -15,7 +15,7 @@ from youtube_intel.hesitation_markers import (
     build_markers_artifact,
     render_markers_markdown,
 )
-from youtube_intel.io_utils import read_json, write_json, write_text
+from youtube_intel.io_utils import read_json, read_required_json, write_json, write_text
 from youtube_intel.reporting import write_handoff_bundle
 from youtube_intel.topic_collection import CLUSTERERS, build_topic_demo_from_segments
 from youtube_plugins.registry import check_all
@@ -37,15 +37,27 @@ def _print(data: dict[str, Any]) -> int:
 
 
 def _load_segment_input(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    data = read_json(path, {})
+    data = read_required_json(path, label="segments file")
     if isinstance(data, list):
-        return {}, data
-    if isinstance(data, dict):
+        segments = data
+        video: dict[str, Any] = {}
+    elif isinstance(data, dict):
         video = data.get("video") if isinstance(data.get("video"), dict) else {}
         segments = data.get("segments")
-        if isinstance(segments, list):
-            return video, segments
-    raise ValueError(f"segments file must be a list or an object with a segments list: {path}")
+        if not isinstance(segments, list):
+            raise InvalidInputError(
+                f"segments file {path} must contain a 'segments' list (got {type(segments).__name__})"
+            )
+    else:
+        raise InvalidInputError(
+            f"segments file {path} must be a list or an object with a segments list (got {type(data).__name__})"
+        )
+    for i, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            raise InvalidInputError(
+                f"segments file {path} segment {i} is not an object (got {type(segment).__name__})"
+            )
+    return video, segments
 
 
 def _default_demo_segments() -> Path:
@@ -99,10 +111,29 @@ def cmd_package(args: argparse.Namespace) -> int:
         raise InvalidInputError(
             f"segments file {args.segments} has no segments; refusing to build an empty package"
         )
+    # The general package command must never fabricate a synthetic identity:
+    # video_id and title must come from --video-id/--title or the input file.
+    video_id = args.video_id or video.get("video_id")
+    if not video_id or not str(video_id).strip():
+        raise InvalidInputError(
+            "package requires a non-empty video_id from --video-id or the input file's video.video_id"
+        )
+    title = args.title or video.get("title")
+    if not title or not str(title).strip():
+        raise InvalidInputError(
+            "package requires a non-empty title from --title or the input file's video.title"
+        )
+    language = args.language or video.get("language")
+    if not language or not str(language).strip():
+        # `und` is the explicit documented escape hatch for undefined language.
+        raise InvalidInputError(
+            "package requires a non-empty language from --language or the input file's "
+            "video.language (use the explicit value 'und' for an undefined language)"
+        )
     package = build_residual_package(
-        video_id=args.video_id or video.get("video_id") or "synthetic-field-demo",
-        title=args.title or video.get("title") or "Synthetic Orchard Sensor Field Notes",
-        language=args.language or video.get("language") or "en",
+        video_id=str(video_id),
+        title=str(title),
+        language=str(language),
         segments=segments,
         duration_seconds=args.duration_seconds or video.get("duration_seconds"),
         genre_override=args.genre,
@@ -121,6 +152,10 @@ def cmd_package(args: argparse.Namespace) -> int:
 
 
 def cmd_worth(args: argparse.Namespace) -> int:
+    # Validate a user-supplied --package before handing it to build_analysis_worth
+    # so a missing file or invalid JSON fails closed instead of a traceback.
+    if args.package:
+        read_required_json(Path(args.package), label="package file")
     result = build_analysis_worth(
         package_path=args.package,
         run_dir=args.run_dir,
@@ -135,13 +170,25 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     worth: dict[str, Any] = {}
     overlay: dict[str, Any] = {}
     if args.package:
-        package = read_json(Path(args.package), {}) or {}
+        package = read_required_json(Path(args.package), label="package file")
+        if not isinstance(package, dict):
+            raise InvalidInputError(
+                f"package file {args.package} must be an object (got {type(package).__name__})"
+            )
     if args.analysis_worth:
-        worth = read_json(Path(args.analysis_worth), {}) or {}
+        worth = read_required_json(Path(args.analysis_worth), label="analysis-worth file")
+        if not isinstance(worth, dict):
+            raise InvalidInputError(
+                f"analysis-worth file {args.analysis_worth} must be an object (got {type(worth).__name__})"
+            )
     elif args.package:
         worth = build_analysis_worth(package_path=args.package)
     if args.overlay:
-        overlay = read_json(Path(args.overlay), {}) or {}
+        overlay = read_required_json(Path(args.overlay), label="overlay file")
+        if not isinstance(overlay, dict):
+            raise InvalidInputError(
+                f"overlay file {args.overlay} must be an object (got {type(overlay).__name__})"
+            )
     manifest = write_handoff_bundle(args.out, package=package, worth=worth, overlay=overlay)
     return _print(manifest)
 
@@ -211,23 +258,44 @@ def cmd_hesitation_demo(args: argparse.Namespace) -> int:
     docs/HESITATION_MARKERS.md.
     """
     fixture = Path(args.fixture) if args.fixture else fixture_path("synthetic_hesitation.json")
-    data = read_json(fixture, {})
-    claims = data.get("claims", []) if isinstance(data, dict) else []
+    data = read_required_json(fixture, label="hesitation fixture")
+    if not isinstance(data, dict):
+        raise InvalidInputError(
+            f"hesitation fixture {fixture} must be an object with a claims list (got {type(data).__name__})"
+        )
+    claims = data.get("claims")
     if not isinstance(claims, list) or not claims:
         raise InvalidInputError(
             f"hesitation fixture {fixture} is missing, empty, or malformed "
             f"(expected an object with a non-empty claims list)"
         )
-    rows = [
-        analyze_claim_words(
-            c.get("claim_id", f"C{i:03d}"),
-            c.get("words", []),
-            expected_text=c.get("expected_text"),
-            span_start=c.get("span_start"),
-            span_end=c.get("span_end"),
+    rows = []
+    for i, c in enumerate(claims, start=1):
+        if not isinstance(c, dict):
+            raise InvalidInputError(
+                f"hesitation fixture {fixture} claim row {i} is not an object (got {type(c).__name__})"
+            )
+        words = c.get("words", [])
+        if not isinstance(words, list):
+            raise InvalidInputError(
+                f"hesitation fixture {fixture} claim row {i} 'words' is not a list (got {type(words).__name__})"
+            )
+        for wi, w in enumerate(words):
+            if not isinstance(w, dict):
+                raise InvalidInputError(
+                    f"hesitation fixture {fixture} claim row {i} word row {wi} is not an object "
+                    f"(got {type(w).__name__}); non-dictionary word rows are rejected "
+                    f"(malformed timestamp dictionaries are reported as malformed rows)"
+                )
+        rows.append(
+            analyze_claim_words(
+                c.get("claim_id", f"C{i:03d}"),
+                words,
+                expected_text=c.get("expected_text"),
+                span_start=c.get("span_start"),
+                span_end=c.get("span_end"),
+            )
         )
-        for i, c in enumerate(claims, start=1)
-    ]
     if all(row["word_count"] == 0 for row in rows):
         raise InvalidInputError(
             f"no valid word-timestamp rows remain in hesitation fixture {fixture}: "

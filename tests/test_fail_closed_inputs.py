@@ -122,7 +122,7 @@ def test_package_empty_segments_fails_closed(tmp_path, capsys) -> None:
 def test_package_blank_text_segments_fail_validation(tmp_path, capsys) -> None:
     segments = tmp_path / "segments.json"
     segments.write_text(
-        json.dumps({"video": {"video_id": ""}, "segments": [{"text": "   "}]}),
+        json.dumps({"video": {"video_id": "v1", "title": "T", "language": "en"}, "segments": [{"text": "   "}]}),
         encoding="utf-8",
     )
     rc, payload = _run(
