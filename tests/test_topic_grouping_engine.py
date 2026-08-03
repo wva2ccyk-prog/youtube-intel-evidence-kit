@@ -82,43 +82,77 @@ def test_evaluation_function_reports_fail_for_bad_fixture(tmp_path: Path) -> Non
     assert bad_result["score"] < result["score"]
 
 
+def _claim(video_id: str, cid: str, text: str, stance: str, support_role: str) -> dict:
+    evidence_id = f"{video_id}:E{cid}"
+    return {
+        "claim_uid": f"{video_id}:{cid}",
+        "text": text,
+        "source_video_id": video_id,
+        "stance": stance,
+        "support_role": support_role,
+        "evidence_ids": [evidence_id],
+        "evidence_coordinate": {
+            "evidence_id": evidence_id,
+            "video_id": video_id,
+            "timestamp_start": 0.0,
+            "timestamp_end": 4.0,
+            "time_ref": "00:00",
+            "speaker": "A",
+            "speaker_confidence": "high",
+            "modality": ["caption"],
+        },
+        "modality_sources": ["caption"],
+    }
+
+
+def _evidence(video_id: str, cid: str, text: str) -> dict:
+    return {
+        "evidence_id": f"{video_id}:E{cid}",
+        "video_id": video_id,
+        "timestamp_start": 0.0,
+        "timestamp_end": 4.0,
+        "time_ref": "00:00",
+        "speaker": "A",
+        "speaker_confidence": "high",
+        "modality": ["caption"],
+        "text": text,
+        "confidence": "medium",
+    }
+
+
 def _two_video_records() -> list[dict]:
     return [
         {
             "video": {"video_id": "v1"},
             "claim_records": [
-                {
-                    "claim_uid": "v1:c1",
-                    "text": "The vendor says the kit can cut water use by twenty percent.",
-                    "source_video_id": "v1",
-                    "stance": "claim_or_promotion",
-                    "support_role": "supporting_or_promotional",
-                    "evidence_ids": [],
-                },
+                _claim(
+                    "v1", "c1",
+                    "The vendor says the kit can cut water use by twenty percent.",
+                    "claim_or_promotion", "supporting_or_promotional",
+                ),
             ],
-            "evidence_records": [],
+            "evidence_records": [
+                _evidence("v1", "c1", "The vendor says the kit can cut water use by twenty percent."),
+            ],
         },
         {
             "video": {"video_id": "v2"},
             "claim_records": [
-                {
-                    "claim_uid": "v2:c1",
-                    "text": "The kit can cut water use, the vendor claims twenty percent.",
-                    "source_video_id": "v2",
-                    "stance": "claim_or_promotion",
-                    "support_role": "supporting_or_promotional",
-                    "evidence_ids": [],
-                },
-                {
-                    "claim_uid": "v2:c2",
-                    "text": "But local soil and maintenance discipline may explain it, not the device.",
-                    "source_video_id": "v2",
-                    "stance": "caution_or_counterpoint",
-                    "support_role": "challenging_or_limiting",
-                    "evidence_ids": [],
-                },
+                _claim(
+                    "v2", "c1",
+                    "The kit can cut water use, the vendor claims twenty percent.",
+                    "claim_or_promotion", "supporting_or_promotional",
+                ),
+                _claim(
+                    "v2", "c2",
+                    "But local soil and maintenance discipline may explain it, not the device.",
+                    "caution_or_counterpoint", "challenging_or_limiting",
+                ),
             ],
-            "evidence_records": [],
+            "evidence_records": [
+                _evidence("v2", "c1", "The kit can cut water use, the vendor claims twenty percent."),
+                _evidence("v2", "c2", "But local soil and maintenance discipline may explain it, not the device."),
+            ],
         },
     ]
 

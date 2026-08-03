@@ -28,14 +28,48 @@ BRIDGE_C = {"claim_uid": "bridge:C", "text": "The vendor claims the kit needs ye
 
 
 def _record(claims: list[dict], video_ids: list[str]) -> list[dict]:
-    return [
-        {
+    records = []
+    for vid in video_ids:
+        claim_records = []
+        evidence_records = []
+        for i, c in enumerate(claims, start=1):
+            evidence_id = f"{vid}:E{i}"
+            claim_records.append(dict(
+                c,
+                source_video_id=vid,
+                stance="claim_or_promotion",
+                support_role="supporting_or_promotional",
+                evidence_ids=[evidence_id],
+                evidence_coordinate={
+                    "evidence_id": evidence_id,
+                    "video_id": vid,
+                    "timestamp_start": 0.0,
+                    "timestamp_end": 4.0,
+                    "time_ref": "00:00",
+                    "speaker": "A",
+                    "speaker_confidence": "high",
+                    "modality": ["caption"],
+                },
+                modality_sources=["caption"],
+            ))
+            evidence_records.append({
+                "evidence_id": evidence_id,
+                "video_id": vid,
+                "timestamp_start": 0.0,
+                "timestamp_end": 4.0,
+                "time_ref": "00:00",
+                "speaker": "A",
+                "speaker_confidence": "high",
+                "modality": ["caption"],
+                "text": c.get("text", ""),
+                "confidence": "medium",
+            })
+        records.append({
             "video": {"video_id": vid},
-            "claim_records": [dict(c, source_video_id=vid, stance="claim_or_promotion", support_role="supporting_or_promotional", evidence_ids=[]) for c in claims],
-            "evidence_records": [],
-        }
-        for vid in video_ids
-    ]
+            "claim_records": claim_records,
+            "evidence_records": evidence_records,
+        })
+    return records
 
 
 def test_bridge_chain_is_broken_under_complete_link() -> None:

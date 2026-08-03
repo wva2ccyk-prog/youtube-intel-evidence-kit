@@ -171,7 +171,7 @@ def test_worth_missing_run_dir_package_fails_closed(tmp_path, capsys) -> None:
 def test_topic_mcp_facade_rejects_empty_object(tmp_path) -> None:
     empty = tmp_path / "empty.json"
     empty.write_text("{}", encoding="utf-8")
-    with pytest.raises(InvalidInputError, match="not a TopicCollection"):
+    with pytest.raises(InvalidInputError, match="not a structurally valid TopicCollection"):
         load_topic_collection(empty)
 
 
@@ -181,7 +181,7 @@ def test_topic_mcp_facade_rejects_missing_claims(tmp_path) -> None:
         json.dumps({"analysis_layer": "cross_video_topic_collection", "claim_groups": [], "claim_index": {}, "claim_total": 0}),
         encoding="utf-8",
     )
-    with pytest.raises(InvalidInputError, match="no claim groups|empty claim_index|claim_total"):
+    with pytest.raises(InvalidInputError, match="missing required top-level field"):
         load_topic_collection(doc)
 
 

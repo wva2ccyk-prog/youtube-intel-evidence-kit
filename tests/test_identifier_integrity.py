@@ -15,6 +15,7 @@ from youtube_intel.topic_collection import build_topic_collection, validate_topi
 
 
 def _claim(uid: str, video_id: str, evidence_ids: tuple[str, ...] = (), local_id: str | None = None) -> dict:
+    coord_evidence_id = evidence_ids[0] if evidence_ids else "x"
     return {
         "claim_uid": uid,
         "source_video_id": video_id,
@@ -29,7 +30,16 @@ def _claim(uid: str, video_id: str, evidence_ids: tuple[str, ...] = (), local_id
         "content_type": "technical_explanation",
         "evidence": "video_internal",
         "evidence_ids": list(evidence_ids),
-        "evidence_coordinate": {"video_id": video_id, "evidence_id": "x"},
+        "evidence_coordinate": {
+            "video_id": video_id,
+            "evidence_id": coord_evidence_id,
+            "timestamp_start": 0.0,
+            "timestamp_end": None,
+            "time_ref": "00:00",
+            "speaker": "A",
+            "speaker_confidence": "high",
+            "modality": ["caption"],
+        },
         "confidence": "medium",
         "modality_sources": ["caption"],
         "claim_group_key": "k",
@@ -204,3 +214,167 @@ def test_valid_records_pass():
     ]
     collection = build_topic_collection(records, topic_id="t", topic_title="T")
     assert collection["claim_total"] == 2
+
+
+# --- Section 8: strengthened topic input and evidence reference integrity ---
+
+
+from youtube_intel.topic_collection import validate_topic_collection_document
+
+
+def _valid_record() -> dict:
+    return _record(
+        "vid-a",
+        [_claim("vid-a:C1", "vid-a", ("vid-a:E1",))],
+        [_evidence("vid-a:E1", "vid-a")],
+    )
+
+
+def test_empty_claim_source_video_rejected():
+    claim = _claim("vid-a:C1", "vid-a", ("vid-a:E1",))
+    claim["source_video_id"] = ""
+    issues = validate_topic_inputs([_record("vid-a", [claim], [_evidence("vid-a:E1", "vid-a")])])
+    assert any("source_video_id is empty" in i for i in issues)
+
+
+def test_empty_evidence_owner_video_rejected():
+    evidence = _evidence("vid-a:E1", "vid-a")
+    evidence["video_id"] = ""
+    issues = validate_topic_inputs([_record("vid-a", [_claim("vid-a:C1", "vid-a", ("vid-a:E1",))], [evidence])])
+    assert any("video_id is empty" in i for i in issues)
+
+
+def test_claim_with_no_evidence_ids_rejected():
+    issues = validate_topic_inputs([_record("vid-a", [_claim("vid-a:C1", "vid-a")], [])])
+    assert any("no evidence ids" in i for i in issues)
+
+
+def test_coordinate_id_not_in_claim_evidence_ids_rejected():
+    claim = _claim("vid-a:C1", "vid-a", ("vid-a:E1",))
+    claim["evidence_coordinate"]["evidence_id"] = "other-id"
+    issues = validate_topic_inputs([
+        _record("vid-a", [claim], [_evidence("vid-a:E1", "vid-a")])
+    ])
+    assert any("not in evidence_ids" in i for i in issues)
+
+
+def test_coordinate_id_dangling_rejected():
+    claim = _claim("vid-a:C1", "vid-a", ("vid-a:E1",))
+    claim["evidence_ids"] = ["vid-a:E1", "missing-e"]
+    claim["evidence_coordinate"]["evidence_id"] = "missing-e"
+    issues = validate_topic_inputs([
+        _record("vid-a", [claim], [_evidence("vid-a:E1", "vid-a")])
+    ])
+    assert any("does not resolve" in i for i in issues)
+
+
+def test_coordinate_timestamp_mismatch_rejected():
+    claim = _claim("vid-a:C1", "vid-a", ("vid-a:E1",))
+    claim["evidence_coordinate"]["timestamp_start"] = 99.0  # evidence has 0.0
+    issues = validate_topic_inputs([
+        _record("vid-a", [claim], [_evidence("vid-a:E1", "vid-a")])
+    ])
+    assert any("timestamp_start" in i and "does not match" in i for i in issues)
+
+
+def test_coordinate_speaker_mismatch_rejected():
+    claim = _claim("vid-a:C1", "vid-a", ("vid-a:E1",))
+    claim["evidence_coordinate"]["speaker"] = "Mr-X"  # evidence has "A"
+    issues = validate_topic_inputs([
+        _record("vid-a", [claim], [_evidence("vid-a:E1", "vid-a")])
+    ])
+    assert any("coordinate.speaker" in i for i in issues)
+
+
+def test_coordinate_modality_mismatch_rejected():
+    claim = _claim("vid-a:C1", "vid-a", ("vid-a:E1",))
+    claim["evidence_coordinate"]["modality"] = ["ocr"]  # evidence has ["caption"]
+    issues = validate_topic_inputs([
+        _record("vid-a", [claim], [_evidence("vid-a:E1", "vid-a")])
+    ])
+    assert any("coordinate.modality" in i for i in issues)
+
+
+def test_non_dict_claim_row_rejected():
+    record = _valid_record()
+    record["claim_records"].append("not-a-dict")
+    issues = validate_topic_inputs([record])
+    assert any("claim row" in i and "not an object" in i for i in issues)
+
+
+def test_non_dict_evidence_row_rejected():
+    record = _valid_record()
+    record["evidence_records"].append(42)
+    issues = validate_topic_inputs([record])
+    assert any("evidence row" in i and "not an object" in i for i in issues)
+
+
+# --- collection-level integrity (validate_topic_collection_document) ----------
+
+
+def _base_collection() -> dict:
+    return {
+        "schema_version": "youtube_topic_collection_v0.1",
+        "topic": {"topic_id": "t", "title": "T", "final_objective": "o"},
+        "source_videos": [{"video_id": "vid-a"}],
+        "analysis_layer": "cross_video_topic_collection",
+        "claim_groups": [
+            {
+                "group_id": "G0001",
+                "claim_group_key": "k",
+                "label": "L",
+                "claim_count": 1,
+                "claim_uids": ["vid-a:C1"],
+                "member_claim_uids": ["vid-a:C1"],
+                "representative_claim_uid": "vid-a:C1",
+                "evidence_ids": ["vid-a:E1"],
+                "evidence_coordinates": [],
+            }
+        ],
+        "terrain": {},
+        "claim_index": {"vid-a:C1": {"claim_uid": "vid-a:C1"}},
+        "evidence_index": {
+            "vid-a:E1": {"evidence_id": "vid-a:E1", "video_id": "vid-a", "timestamp_start": 0.0, "timestamp_end": None, "time_ref": "00:00", "speaker": "A", "speaker_confidence": "high", "modality": ["caption"]}
+        },
+        "grouping_method": {},
+        "provenance": {},
+        "limitations": [],
+        "claim_total": 1,
+    }
+
+
+def test_dangling_group_claim_uid_rejected():
+    c = _base_collection()
+    c["claim_groups"][0]["claim_uids"] = ["ghost-claim"]
+    assert any("member claim uid does not resolve" in i for i in validate_topic_collection_document(c))
+
+
+def test_dangling_group_evidence_id_rejected():
+    c = _base_collection()
+    c["claim_groups"][0]["evidence_ids"] = ["ghost-evidence"]
+    assert any("evidence id does not resolve" in i for i in validate_topic_collection_document(c))
+
+
+def test_invalid_representative_claim_uid_rejected():
+    c = _base_collection()
+    c["claim_groups"][0]["representative_claim_uid"] = "not-in-group"
+    assert any("representative_claim_uid" in i for i in validate_topic_collection_document(c))
+
+
+def test_incorrect_group_claim_count_rejected():
+    c = _base_collection()
+    c["claim_groups"][0]["claim_count"] = 5  # actual member uids = 1
+    assert any("claim_count 5 != member uids 1" in i for i in validate_topic_collection_document(c))
+
+
+def test_incorrect_collection_claim_total_rejected():
+    c = _base_collection()
+    c["claim_total"] = 99  # claim_index size = 1
+    assert any("claim_total 99 != claim_index size 1" in i for i in validate_topic_collection_document(c))
+
+
+def test_duplicate_coordinate_id_rejected():
+    c = _base_collection()
+    coord = {"evidence_id": "vid-a:E1", "video_id": "vid-a", "timestamp_start": 0.0, "timestamp_end": None, "time_ref": "00:00", "speaker": "A", "speaker_confidence": "high", "modality": ["caption"]}
+    c["claim_groups"][0]["evidence_coordinates"] = [coord, dict(coord)]
+    assert any("duplicate coordinate evidence id" in i for i in validate_topic_collection_document(c))
