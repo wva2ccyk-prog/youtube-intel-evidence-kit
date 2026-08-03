@@ -120,13 +120,19 @@ def test_knowledge_record_preserves_cue_provenance():
     assert sorted(all_indices) == [0, 1, 2, 3]
 
 
-def test_cue_mode_has_empty_provenance_fields():
+def test_cue_mode_captures_single_cue_provenance():
+    # The default cue path normalizes each raw segment into a single-cue
+    # provenance structure (legacy time_ref-only segments: start = parsed
+    # time_ref, end stays None - never fabricated).
     package = _package(sentence_mode=False)
     d = package.claim_candidates[0].to_dict()
-    assert d["cue_indices"] == []
-    assert d["source_time_refs"] == []
-    assert d["span_start"] is None
+    assert d["cue_indices"] == [0]
+    assert d["source_time_refs"] == ["00:12"]
+    assert d["span_start"] == 12.0
     assert d["span_end"] is None
+    assert d["source_cue_coordinates"][0]["start"] == 12.0
+    assert d["source_cue_coordinates"][0]["end"] is None
+    assert d["source_cue_coordinates"][0]["cue_index"] == 0
 
 
 # --- Section 2: structured cue timing provenance through every layer ---

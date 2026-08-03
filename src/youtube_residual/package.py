@@ -7,6 +7,9 @@ It does not decide truth, run source verification, or call external providers.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
+
+from youtube_intel.errors import InvalidInputError
 
 from .extractor import ClaimCandidate, build_claim_candidates
 from .genres import GenreDetection, detect_genre
@@ -72,6 +75,62 @@ def _looks_mojibake(text: str) -> bool:
     return False
 
 
+def normalize_segment_provenance(
+    segment: dict,
+    *,
+    cue_index: int,
+) -> dict:
+    """Normalize a raw segment's timing into a complete single-cue provenance.
+
+    Uses the same timestamp parser and conventions as sentence assembly so the
+    default ``cue`` path and the opt-in ``sentence`` path produce compatible
+    coordinate formats. Structured ``start``/``end`` take precedence over the
+    display-oriented ``time_ref``; ``time_ref`` is only a legacy fallback for
+    start; ``end`` stays ``None`` when no real end exists (never fabricated).
+    Fractional precision is preserved (never rounded).
+
+    A present-but-unparseable structured timestamp is rejected with
+    ``InvalidInputError``: obviously invalid values are never silently coerced
+    into plausible coordinates (e.g. a bad ``start`` cannot silently fall back
+    to ``time_ref``).
+    """
+    from youtube_intel.sentence_assembly import parse_timestamp
+
+    start_raw = segment.get("start")
+    if start_raw not in (None, ""):
+        start = parse_timestamp(start_raw)
+        if start is None:
+            raise InvalidInputError(
+                f"segment {cue_index} has an invalid structured start timestamp: {start_raw!r}"
+            )
+    else:
+        start = parse_timestamp(segment.get("time_ref"))
+    end_raw = segment.get("end")
+    if end_raw not in (None, ""):
+        end = parse_timestamp(end_raw)
+        if end is None:
+            raise InvalidInputError(
+                f"segment {cue_index} has an invalid structured end timestamp: {end_raw!r}"
+            )
+    else:
+        end = None
+    return {
+        "cue_indices": [cue_index],
+        "source_time_refs": [segment.get("time_ref")],
+        "source_cue_coordinates": [
+            {
+                "cue_index": cue_index,
+                "time_ref": segment.get("time_ref"),
+                "start": start,
+                "end": end,
+                "speaker": segment.get("speaker"),
+                "modality_source": segment.get("modality_source"),
+                "source_hint": segment.get("source_hint"),
+            }
+        ],
+        "span_start": start,
+        "span_end": end,
+    }
 def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
     """Merge consecutive segment dicts into sentence-like segment dicts.
 
@@ -99,11 +158,23 @@ def assemble_segments_to_sentences(segments: list[dict]) -> list[dict]:
     for i, seg in enumerate(segments):
         if not isinstance(seg, dict):
             raise ValueError(f"segment {i} is not an object")
-        # Structured start/end win over the legacy time_ref fallback.
-        start = parse_timestamp(seg.get("start"))
-        if start is None:
+        # Structured start/end win over the legacy time_ref fallback. A
+        # present-but-unparseable structured timestamp is rejected (never
+        # silently coerced), matching the default cue path policy.
+        start_raw = seg.get("start")
+        if start_raw not in (None, ""):
+            start = parse_timestamp(start_raw)
+            if start is None:
+                raise InvalidInputError(f"segment {i} has an invalid structured start timestamp: {start_raw!r}")
+        else:
             start = parse_timestamp(seg.get("time_ref"))
-        end = parse_timestamp(seg.get("end"))
+        end_raw = seg.get("end")
+        if end_raw not in (None, ""):
+            end = parse_timestamp(end_raw)
+            if end is None:
+                raise InvalidInputError(f"segment {i} has an invalid structured end timestamp: {end_raw!r}")
+        else:
+            end = None
         cues.append(
             Cue(
                 index=i,
@@ -172,7 +243,24 @@ def build_residual_package(
 
     candidates: list[ClaimCandidate] = []
     next_index = 1
-    for seg in segments:
+    for i, seg in enumerate(segments):
+        if sentence_mode:
+            # Assembled units already carry complete provenance.
+            cue_indices = seg.get("cue_indices")
+            source_time_refs = seg.get("source_time_refs")
+            source_cue_coordinates = seg.get("source_cue_coordinates")
+            span_start = seg.get("span_start")
+            span_end = seg.get("span_end")
+        else:
+            # Default cue mode: normalize the raw segment into a single-cue
+            # provenance structure so real structured start/end timestamps are
+            # preserved (time_ref is only a legacy fallback for start).
+            provenance = normalize_segment_provenance(seg, cue_index=i)
+            cue_indices = provenance["cue_indices"]
+            source_time_refs = provenance["source_time_refs"]
+            source_cue_coordinates = provenance["source_cue_coordinates"]
+            span_start = provenance["span_start"]
+            span_end = provenance["span_end"]
         seg_candidates = build_claim_candidates(
             seg.get("text", ""),
             speaker=seg.get("speaker"),
@@ -181,11 +269,11 @@ def build_residual_package(
             modality_source=seg.get("modality_source", "transcript"),
             start_index=next_index,
             presplit=not sentence_mode,
-            cue_indices=seg.get("cue_indices"),
-            source_time_refs=seg.get("source_time_refs"),
-            source_cue_coordinates=seg.get("source_cue_coordinates"),
-            span_start=seg.get("span_start"),
-            span_end=seg.get("span_end"),
+            cue_indices=cue_indices,
+            source_time_refs=source_time_refs,
+            source_cue_coordinates=source_cue_coordinates,
+            span_start=span_start,
+            span_end=span_end,
         )
         candidates.extend(seg_candidates)
         next_index += len(seg_candidates)
