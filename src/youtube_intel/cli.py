@@ -65,33 +65,68 @@ def _default_demo_segments() -> Path:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    root = _repo_root()
-    gitignore = (root / ".gitignore").read_text(encoding="utf-8") if (root / ".gitignore").exists() else ""
-    required_ignores = ["outputs/", "pilot_[r]uns/", "codex_state/", ".youtube_intel/", "*.db", "*.log"]
-    ignore_status = {pattern: (pattern in gitignore) for pattern in required_ignores}
-    demo_available = _default_demo_segments().exists() and fixture_path("synthetic_package.json").exists()
-    topic_demo_available = fixture_path("topic_demo").is_dir()
-    leak_scan_available = (root / "scripts" / "public_release_leak_scan.py").exists()
+    root = find_source_root()
     runtime_mode = (
         "source_checkout" if is_source_checkout()
         else "installed_package" if is_installed_package()
         else "missing_resources"
     )
+    checks: dict[str, Any] = {}
+
+    # runtime_resources: source fixtures must exist in source mode; packaged
+    # fixtures must exist in installed mode; missing-resource mode always fails.
+    if runtime_mode == "missing_resources":
+        checks["runtime_resources"] = {
+            "ok": False,
+            "message": "no source checkout marker and no packaged fixtures are accessible",
+        }
+    else:
+        demo_ok = fixture_path("synthetic_segments.json").exists() and fixture_path("synthetic_package.json").exists()
+        topic_ok = fixture_path("topic_demo").is_dir()
+        hz_ok = fixture_path("synthetic_hesitation.json").exists()
+        checks["runtime_resources"] = {
+            "ok": demo_ok and topic_ok and hz_ok,
+            "message": (
+                "resources present"
+                if (demo_ok and topic_ok and hz_ok)
+                else "one or more required fixtures are missing"
+            ),
+        }
+        checks["synthetic_demo"] = {"ok": demo_ok}
+        checks["topic_demo"] = {"ok": topic_ok}
+
+    # gitignore_safety / repository-only checks apply only in source mode.
+    if runtime_mode == "source_checkout":
+        assert root is not None
+        gitignore = (root / ".gitignore").read_text(encoding="utf-8") if (root / ".gitignore").exists() else ""
+        required_ignores = ["outputs/", "pilot_[r]uns/", "codex_state/", ".youtube_intel/", "*.db", "*.log"]
+        ignore_status = {pattern: (pattern in gitignore) for pattern in required_ignores}
+        missing_ignores = [p for p, ok in ignore_status.items() if not ok]
+        script_ok = (root / "scripts" / "public_release_leak_scan.py").exists()
+        checks["gitignore_safety"] = {
+            "ok": not missing_ignores,
+            "missing": missing_ignores,
+        }
+        checks["repository_safety_scripts"] = {
+            "ok": script_ok,
+            "message": "leak scan script present" if script_ok else "leak scan script missing",
+        }
+    else:
+        checks["gitignore_safety"] = {"ok": True, "not_applicable": True}
+        checks["repository_safety_scripts"] = {"ok": True, "not_applicable": True}
+
+    all_ok = all(c.get("ok") is True for c in checks.values())
     result = {
-        "ok": True,
+        "ok": all_ok,
         "schema_version": "youtube_intel_doctor.v0.1",
+        "checks": checks,
         "core": {
             "python": sys.version.split()[0],
-            "repo_root": str(root),
+            "repo_root": str(root) if root else None,
             "runtime_mode": runtime_mode,
-            "synthetic_demo_available": demo_available,
-            "synthetic_topic_demo_available": topic_demo_available,
-            "leak_scan_script_available": leak_scan_available,
-            "repository_only_checks_applicable": is_source_checkout(),
-        },
-        "safety": {
-            "gitignore_patterns": ignore_status,
-            "all_required_ignores_present": all(ignore_status.values()),
+            "synthetic_demo_available": checks.get("synthetic_demo", {}).get("ok", False),
+            "synthetic_topic_demo_available": checks.get("topic_demo", {}).get("ok", False),
+            "repository_only_checks_applicable": runtime_mode == "source_checkout",
         },
         "optional_plugins": check_all(),
         "project_identity": "alpha_cross_video_evidence_contract",
@@ -235,7 +270,6 @@ def cmd_demo(args: argparse.Namespace) -> int:
 
 
 def cmd_topic_demo(args: argparse.Namespace) -> int:
-    root = _repo_root()
     topic_dir = Path(args.topic_dir) if args.topic_dir else fixture_path("topic_demo")
     manifest = build_topic_demo_from_segments(
         topic_dir,
