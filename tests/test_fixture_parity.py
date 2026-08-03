@@ -120,3 +120,18 @@ def test_fixture_source_vs_installed_resolution() -> None:
     assert Path(source).is_file()
     if is_source_checkout():
         assert str(source).startswith(str(REPO_ROOT / "examples"))
+
+
+def test_installed_module_inside_source_tree_is_not_reported_as_source(tmp_path) -> None:
+    # A venv created inside a source tree must not make the installed module
+    # report a source checkout: the module's __file__ lives under site-packages.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text("", encoding="utf-8")
+    (repo / "src" / "youtube_intel").mkdir(parents=True)
+    site = repo / ".venv" / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True)
+    module = site / "youtube_intel" / "_fixtures" / "__init__.py"
+    assert find_source_root(start=module) is None, (
+        "an installed module under site-packages must not be a source checkout"
+    )

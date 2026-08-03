@@ -39,11 +39,16 @@ def find_source_root(start: Union[str, Path, None] = None) -> Path | None:
     """Return the repository root containing this source tree, or None.
 
     Walks upward from the module path and returns the first ancestor that
-    contains both ``pyproject.toml`` and ``src/youtube_intel``. Returns None for
-    an installed wheel (where the module lives inside site-packages) so
-    source-checkout detection is unambiguous.
+    contains both ``pyproject.toml`` and ``src/youtube_intel``. A module that
+    lives under a ``site-packages`` / ``dist-packages`` directory is an
+    installed package, not a source checkout - even when the virtualenv itself
+    sits inside a source tree - so detection never misreports a wheel install
+    as a source checkout.
     """
     current = Path(start or _SELF).resolve()
+    parts = current.parts
+    if any(part in ("site-packages", "dist-packages") for part in parts):
+        return None
     candidates = [current.parent, *current.parents]
     for parent in candidates:
         if (
