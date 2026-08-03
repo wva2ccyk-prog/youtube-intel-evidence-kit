@@ -8,14 +8,26 @@ version = "0.1.0"
 description = "Cross-video YouTube opinion-terrain packaging with caption-first evidence gates and MCP-ready handoff helpers."
 requires-python = ">=3.10"
 dependencies = []
+authors = [{ name = "wva2ccyk-prog" }]
 license = "MIT"
 license-files = ["LICENSE"]
-readme = "README.md"
+readme = "docs/PYPI_README.md"
 keywords = ["youtube", "video-analysis", "mcp", "opinion-terrain", "evidence"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
+
+[project.urls]
+Homepage = "https://github.com/wva2ccyk-prog/youtube-intel-evidence-kit"
+Repository = "https://github.com/wva2ccyk-prog/youtube-intel-evidence-kit"
+Issues = "https://github.com/wva2ccyk-prog/youtube-intel-evidence-kit/issues"
+Changelog = "https://github.com/wva2ccyk-prog/youtube-intel-evidence-kit/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "jsonschema>=4.0.0"]
