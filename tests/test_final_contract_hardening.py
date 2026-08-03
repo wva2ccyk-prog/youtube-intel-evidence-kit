@@ -48,6 +48,7 @@ def test_runtime_rejects_invalid_disagreement_relation_fields(tmp_path: Path, fi
     assert document["terrain"]["disagreement_relations"]
     document["terrain"]["disagreement_relations"][0][field] = value
     assert validate_topic_collection_document(document)
+    assert _schema_errors(document)
 
 
 @pytest.mark.parametrize(
@@ -63,12 +64,32 @@ def test_runtime_rejects_invalid_outlier_fields(tmp_path: Path, field: str, valu
     assert document["terrain"]["outlier_details"]
     document["terrain"]["outlier_details"][0][field] = value
     assert validate_topic_collection_document(document)
+    assert _schema_errors(document)
 
 
 def test_runtime_rejects_non_boolean_operator_judgment(tmp_path: Path) -> None:
     document = _collection(tmp_path)
     document["terrain"]["operator_judgment_required"] = "true"
     assert any("operator_judgment_required" in issue for issue in validate_topic_collection_document(document))
+    assert _schema_errors(document)
+
+
+@pytest.mark.parametrize("field", ["relation_type", "confidence", "human_review_required", "why_flagged"])
+def test_schema_and_runtime_reject_missing_disagreement_relation_fields(tmp_path: Path, field: str) -> None:
+    document = _collection(tmp_path)
+    assert document["terrain"]["disagreement_relations"]
+    document["terrain"]["disagreement_relations"][0].pop(field)
+    assert validate_topic_collection_document(document)
+    assert _schema_errors(document)
+
+
+@pytest.mark.parametrize("field", ["outlier_type", "followup_priority", "why_outlier"])
+def test_schema_and_runtime_reject_missing_outlier_fields(tmp_path: Path, field: str) -> None:
+    document = _collection(tmp_path)
+    assert document["terrain"]["outlier_details"]
+    document["terrain"]["outlier_details"][0].pop(field)
+    assert validate_topic_collection_document(document)
+    assert _schema_errors(document)
 
 
 def test_schema_and_runtime_both_reject_null_source_title(tmp_path: Path) -> None:
@@ -89,6 +110,14 @@ def test_schema_and_runtime_both_reject_null_coordinate_confidence(tmp_path: Pat
         for coordinate in group["evidence_coordinates"]:
             if coordinate["evidence_id"] == evidence_id:
                 coordinate["speaker_confidence"] = None
+    assert validate_topic_collection_document(document)
+    assert _schema_errors(document)
+
+
+def test_schema_and_runtime_both_require_evidence_speaker_confidence(tmp_path: Path) -> None:
+    document = _collection(tmp_path)
+    evidence_id = next(iter(document["evidence_index"]))
+    document["evidence_index"][evidence_id].pop("speaker_confidence")
     assert validate_topic_collection_document(document)
     assert _schema_errors(document)
 
