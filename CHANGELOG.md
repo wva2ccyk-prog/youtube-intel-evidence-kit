@@ -6,7 +6,11 @@ implementation notes, see `IMPLEMENTATION_CHANGELOG.md`.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- Milestone 1 quality targets in `ROADMAP.md`, pinned as strict-xfail tests in
+  `tests/test_milestone1_quality_targets.py` with labeled Korean, English, and
+  filler-noise evaluation topics under `tests/fixtures/eval_topics/`.
 
 ## [0.1.0] - 2026-08-03
 

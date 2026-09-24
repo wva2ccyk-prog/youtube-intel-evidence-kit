@@ -1,0 +1,58 @@
+{
+  "video": {
+    "video_id": "synthetic-ko-filler-b",
+    "title": "합성 채널 B 전기차 이야기",
+    "language": "ko",
+    "duration_seconds": 60
+  },
+  "segments": [
+    {
+      "text": "안녕하세요 여러분, 오늘도 채널에 와주셔서 감사합니다.",
+      "start": 0.0,
+      "end": 6.0,
+      "speaker": "host",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "자 그럼 바로 본론으로 들어가 보겠습니다.",
+      "start": 10.0,
+      "end": 16.0,
+      "speaker": "host",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "타이어 마모가 내연기관 차보다 빠른 편이라 교체 주기를 짧게 잡아야 합니다.",
+      "start": 20.0,
+      "end": 26.0,
+      "speaker": "host",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "소프트웨어 업데이트 이후 회생제동 느낌이 달라졌어요.",
+      "start": 30.0,
+      "end": 36.0,
+      "speaker": "host",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "영상이 도움이 되셨다면 구독과 좋아요 부탁드립니다.",
+      "start": 40.0,
+      "end": 46.0,
+      "speaker": "host",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "다음 영상에서 또 만나요.",
+      "start": 50.0,
+      "end": 56.0,
+      "speaker": "host",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}

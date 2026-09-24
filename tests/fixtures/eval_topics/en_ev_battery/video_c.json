@@ -1,0 +1,34 @@
+{
+  "video": {
+    "video_id": "synthetic-en-ev-owner-c",
+    "title": "Synthetic EV owner one-year review",
+    "language": "en",
+    "duration_seconds": 100
+  },
+  "segments": [
+    {
+      "text": "After one year my winter range dropped a lot and it surprised me.",
+      "start": 15.0,
+      "end": 20.0,
+      "speaker": "owner",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "I only used fast chargers and the battery capacity still seems fine.",
+      "start": 44.0,
+      "end": 50.0,
+      "speaker": "owner",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "I bought it for the subsidy but resale value dropped so much that I regret it.",
+      "start": 80.0,
+      "end": 86.0,
+      "speaker": "owner",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}

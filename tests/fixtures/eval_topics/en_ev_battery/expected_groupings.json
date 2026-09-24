@@ -1,0 +1,49 @@
+{
+  "schema_version": "youtube_topic_grouping_fixture_v0.1",
+  "metric": "pair_agreement",
+  "threshold": 0.75,
+  "must_link": [
+    [
+      "The dealer says this battery keeps over 90 percent capacity after ten years.",
+      "Ninety percent after ten years is an exaggeration; expect around eighty percent capacity."
+    ],
+    [
+      "He insists daily fast charging causes no harm to the battery at all.",
+      "In my shop, cars that were fast charged daily showed clearly faster battery degradation."
+    ],
+    [
+      "He insists daily fast charging causes no harm to the battery at all.",
+      "I only used fast chargers and the battery capacity still seems fine."
+    ],
+    [
+      "In my shop, cars that were fast charged daily showed clearly faster battery degradation.",
+      "I only used fast chargers and the battery capacity still seems fine."
+    ],
+    [
+      "Winter range loss is barely noticeable according to him.",
+      "In winter the heater cuts driving range by twenty to thirty percent."
+    ],
+    [
+      "Winter range loss is barely noticeable according to him.",
+      "After one year my winter range dropped a lot and it surprised me."
+    ],
+    [
+      "In winter the heater cuts driving range by twenty to thirty percent.",
+      "After one year my winter range dropped a lot and it surprised me."
+    ]
+  ],
+  "cannot_link": [
+    [
+      "The dealer says this battery keeps over 90 percent capacity after ten years.",
+      "In winter the heater cuts driving range by twenty to thirty percent."
+    ],
+    [
+      "I bought it for the subsidy but resale value dropped so much that I regret it.",
+      "The dealer says this battery keeps over 90 percent capacity after ten years."
+    ],
+    [
+      "Winter range loss is barely noticeable according to him.",
+      "In my shop, cars that were fast charged daily showed clearly faster battery degradation."
+    ]
+  ]
+}

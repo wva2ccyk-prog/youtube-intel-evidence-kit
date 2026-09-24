@@ -1,0 +1,34 @@
+{
+  "video": {
+    "video_id": "synthetic-en-ev-mechanic-b",
+    "title": "Synthetic mechanic view on EV batteries",
+    "language": "en",
+    "duration_seconds": 110
+  },
+  "segments": [
+    {
+      "text": "In my shop, cars that were fast charged daily showed clearly faster battery degradation.",
+      "start": 20.0,
+      "end": 27.0,
+      "speaker": "mechanic",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "Ninety percent after ten years is an exaggeration; expect around eighty percent capacity.",
+      "start": 55.0,
+      "end": 61.0,
+      "speaker": "mechanic",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "In winter the heater cuts driving range by twenty to thirty percent.",
+      "start": 90.0,
+      "end": 96.0,
+      "speaker": "mechanic",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}

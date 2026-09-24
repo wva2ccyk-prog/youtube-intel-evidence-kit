@@ -1,0 +1,34 @@
+{
+  "video": {
+    "video_id": "synthetic-ko-ev-owner-c",
+    "title": "합성 전기차 차주 1년 후기",
+    "language": "ko",
+    "duration_seconds": 100
+  },
+  "segments": [
+    {
+      "text": "1년 타보니 겨울에 주행거리가 확 줄어서 당황했습니다.",
+      "start": 15.0,
+      "end": 20.0,
+      "speaker": "owner",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "급속충전만 썼는데 아직 배터리 용량은 괜찮은 것 같아요.",
+      "start": 44.0,
+      "end": 50.0,
+      "speaker": "owner",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "보조금 때문에 샀는데 중고 가격이 너무 떨어져서 후회합니다.",
+      "start": 80.0,
+      "end": 86.0,
+      "speaker": "owner",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}

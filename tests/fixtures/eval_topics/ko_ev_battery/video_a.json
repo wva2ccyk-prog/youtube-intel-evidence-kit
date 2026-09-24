@@ -1,0 +1,34 @@
+{
+  "video": {
+    "video_id": "synthetic-ko-ev-dealer-a",
+    "title": "합성 전기차 배터리 딜러 설명",
+    "language": "ko",
+    "duration_seconds": 90
+  },
+  "segments": [
+    {
+      "text": "딜러는 이 배터리가 10년이 지나도 용량이 90퍼센트 이상 유지된다고 말합니다.",
+      "start": 12.0,
+      "end": 18.5,
+      "speaker": "dealer",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "급속충전을 매일 해도 배터리에는 전혀 문제가 없다고 강조했습니다.",
+      "start": 40.0,
+      "end": 46.0,
+      "speaker": "dealer",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    },
+    {
+      "text": "겨울철 주행거리 감소는 체감상 거의 없다고 합니다.",
+      "start": 70.0,
+      "end": 75.0,
+      "speaker": "dealer",
+      "source_hint": "transcript",
+      "modality_source": "transcript"
+    }
+  ]
+}
